@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+data.json
+server.log
+*.log
+synthetic-pdfs/
+generate_loan_pdfs.py
+digest_payload.json
+push-digest.json
+.DS_Store

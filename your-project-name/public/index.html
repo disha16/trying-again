@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Newsletter Digest</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="app-title">Newsletter Digest</div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="digest">Digest</button>
+      <button class="tab" data-tab="sources">Sources</button>
+      <button class="tab" data-tab="chat">Chat</button>
+    </nav>
+    <div class="claude-badge">⚡ Powered by Claude MCP</div>
+  </header>
+
+  <!-- ─── DIGEST TAB ─── -->
+  <section class="tab-content active" id="tab-digest">
+    <div class="digest-header">
+      <div>
+        <h2 id="digestTitle">Newsletter Digest</h2>
+        <p id="digestMeta" class="meta"></p>
+      </div>
+      <button id="refreshBtn" class="btn-primary">↻ Refresh</button>
+    </div>
+
+    <div id="runStatus" class="status-bar hidden"></div>
+
+    <!-- How-to hint shown only when no digest yet -->
+    <div id="howToRun" class="how-to hidden">
+      <div class="how-to-icon">📬</div>
+      <p>Ask Claude to fetch your newsletters:</p>
+      <code>"Run my newsletter digest"</code>
+      <p class="hint">Claude will scan your Gmail, summarise everything, and populate this view automatically.</p>
+    </div>
+
+    <!-- Category tabs + news panel -->
+    <div id="digestArea" class="hidden">
+      <nav class="inner-tabs">
+        <button class="inner-tab active" data-cat="top_today">Today's Top 10</button>
+        <button class="inner-tab" data-cat="tech">Tech</button>
+        <button class="inner-tab" data-cat="us_business">US Business</button>
+        <button class="inner-tab" data-cat="india_business">India Business</button>
+        <button class="inner-tab" data-cat="global_economies">Global Economies</button>
+        <button class="inner-tab" data-cat="politics">Politics</button>
+        <button class="inner-tab" data-cat="everything_else">Everything Else</button>
+      </nav>
+      <div id="newsPanel" class="news-panel"></div>
+    </div>
+  </section>
+
+  <!-- ─── SOURCES TAB ─── -->
+  <section class="tab-content hidden" id="tab-sources">
+    <h2>Sources</h2>
+    <p class="meta">Add the newsletter names you forward to Gmail. Toggle off any you want Claude to skip.</p>
+    <div class="add-source-row">
+      <input type="text" id="newSourceInput" placeholder="Name, e.g. TechCrunch" />
+      <input type="email" id="newSourceEmail" placeholder="Sender email, e.g. newsletters@techcrunch.com" />
+      <input type="url" id="newSourceUrl" placeholder="Website, e.g. https://techcrunch.com" />
+      <button id="addSourceBtn" class="btn-primary">Add</button>
+    </div>
+    <p class="source-hint">The sender email is in the forwarded email body — look for "From: …" inside the email.</p>
+    <ul id="sourceList" class="source-list"></ul>
+  </section>
+
+  <!-- ─── CHAT TAB ─── -->
+  <section class="tab-content hidden" id="tab-chat">
+    <div class="chat-header-row">
+      <div>
+        <h2>Chat with your Inbox</h2>
+        <p class="meta">Ask anything — newsletters, specific emails, senders. Full inbox access.</p>
+      </div>
+      <div id="inboxSyncBadge" class="inbox-sync-badge hidden">
+        <span class="sync-dot"></span>
+        <span id="inboxSyncLabel">Inbox synced —</span>
+      </div>
+    </div>
+    <div id="chatMessages" class="chat-messages">
+      <div class="msg assistant">Hi! I have full access to your inbox. Ask me anything — e.g. <strong>"What's the top story in tech?"</strong>, <strong>"Any emails from Amazon?"</strong>, or <strong>"Summarise the India business news."</strong></div>
+    </div>
+    <div class="chat-input-row">
+      <textarea id="chatInput" placeholder="Ask about today's news, a specific email, sender…" rows="2"></textarea>
+      <button id="chatSend" class="btn-primary">Send</button>
+    </div>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
