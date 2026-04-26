@@ -13,7 +13,9 @@
     <nav class="tabs">
       <button class="tab active" data-tab="digest">Digest</button>
       <button class="tab" data-tab="sources">Sources</button>
+      <button class="tab" data-tab="readmap">Read Map</button>
       <button class="tab" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="settings">Settings</button>
     </nav>
     <div class="claude-badge">⚡ Powered by Claude MCP</div>
   </header>
@@ -53,6 +55,13 @@
     </div>
   </section>
 
+  <!-- ─── READ MAP TAB ─── -->
+  <section class="tab-content hidden" id="tab-readmap">
+    <h2>Read Map</h2>
+    <p class="meta">Stories you've read today, grouped by cluster topic.</p>
+    <div id="readMapList" class="cluster-list"></div>
+  </section>
+
   <!-- ─── SOURCES TAB ─── -->
   <section class="tab-content hidden" id="tab-sources">
     <h2>Sources</h2>
@@ -86,6 +95,24 @@
       <textarea id="chatInput" placeholder="Ask about today's news, a specific email, sender…" rows="2"></textarea>
       <button id="chatSend" class="btn-primary">Send</button>
     </div>
+  </section>
+
+  <!-- ─── SETTINGS TAB ─── -->
+  <section class="tab-content hidden" id="tab-settings">
+    <h2>Settings</h2>
+    <p class="meta">Configure how digests are generated.</p>
+    <div class="settings-row">
+      <label class="settings-label" for="modelPicker">Digest model</label>
+      <select id="modelPicker" class="model-picker">
+        <option value="qwen-turbo">Qwen Turbo (fast, cheap)</option>
+        <option value="qwen-plus">Qwen Plus</option>
+        <option value="qwen-max">Qwen Max</option>
+        <option value="claude-haiku-4-5-20251001">Claude Haiku</option>
+        <option value="claude-sonnet-4-6">Claude Sonnet</option>
+        <option value="claude-opus-4-6">Claude Opus</option>
+      </select>
+    </div>
+    <p id="modelSaveStatus" class="meta" style="margin-top:8px;color:var(--gold)"></p>
   </section>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>

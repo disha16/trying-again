@@ -1,0 +1,5 @@
+node_modules
+synthetic-pdfs
+*.log
+generate_loan_pdfs.py
+push-digest.json

@@ -53,6 +53,27 @@ const getInboxSnapshot = ()  => getKey('inboxSnapshot');
 const setInboxSnapshot = s   => setKey('inboxSnapshot', s);
 const getGmailTokens   = ()  => getKey('gmail_tokens');
 const setGmailTokens   = t   => setKey('gmail_tokens', t);
+const getSettings      = ()  => getKey('settings').then(v => v ?? { model: 'qwen-turbo' });
+const setSettings      = s   => setKey('settings', s);
+const getClusters      = ()  => getKey('clusters');
+const setClusters      = c   => setKey('clusters', c);
+
+// Email headline cache — keyed by Gmail message ID
+// Shape: { [msgId]: { source, headlines: string[], cachedAt: isoString } }
+async function getEmailCache() {
+  const cache = await getKey('emailCache');
+  if (!cache) return {};
+  // Evict entries older than 7 days
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const fresh  = Object.fromEntries(
+    Object.entries(cache).filter(([, v]) => new Date(v.cachedAt).getTime() > cutoff)
+  );
+  return fresh;
+}
+
+async function setEmailCache(cache) {
+  return setKey('emailCache', cache);
+}
 
 module.exports = {
   isVercel,
@@ -61,4 +82,7 @@ module.exports = {
   getLastRun, setLastRun,
   getInboxSnapshot, setInboxSnapshot,
   getGmailTokens, setGmailTokens,
+  getSettings, setSettings,
+  getClusters, setClusters,
+  getEmailCache, setEmailCache,
 };

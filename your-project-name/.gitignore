@@ -9,3 +9,4 @@ generate_loan_pdfs.py
 digest_payload.json
 push-digest.json
 .DS_Store
+.vercel

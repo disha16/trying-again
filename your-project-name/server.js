@@ -1,12 +1,14 @@
-require('dotenv').config({ override: true });
+require('dotenv').config({ override: true, path: require('path').join(__dirname, '.env') });
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
-const Anthropic = require('@anthropic-ai/sdk');
 
+const Anthropic = require('@anthropic-ai/sdk');
 const storage   = require('./lib/storage');
 const gmail     = require('./lib/gmail');
+const clusterer = require('./lib/clusterer');
 const digestGen = require('./lib/digest-generator');
+const supa      = require('./lib/supabase');
 
 const app  = express();
 app.use(cors());
@@ -48,9 +50,43 @@ app.delete('/sources/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+app.get('/api/settings', async (req, res) => res.json(await storage.getSettings()));
+
+app.post('/api/settings', async (req, res) => {
+  const { model } = req.body;
+  const valid = [...digestGen.QWEN_MODELS, ...digestGen.ANTHROPIC_MODELS];
+  if (!valid.includes(model)) return res.status(400).json({ error: 'Invalid model' });
+  await storage.setSettings({ model });
+  res.json({ success: true, model });
+});
+
 // ─── Digest cache ──────────────────────────────────────────────────────────────
 
-app.get('/last-run', async (req, res) => res.json(await storage.getLastRun()));
+app.get('/last-run',      async (req, res) => res.json(await storage.getLastRun()));
+app.get('/api/clusters',  async (req, res) => res.json(await storage.getClusters()));
+
+app.post('/api/mark-read', async (req, res) => {
+  const { headline, cluster_keywords, category, source } = req.body;
+  if (!headline) return res.status(400).json({ error: 'headline required' });
+  try {
+    await supa.markRead({ headline, cluster_keywords, category, source });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[mark-read]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/read-history', async (req, res) => {
+  try {
+    const history = await supa.getReadHistory(3);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.post('/api/push-digest', async (req, res) => {
   const { digest } = req.body;
@@ -161,17 +197,39 @@ app.get('/api/cron/digest', async (req, res) => {
   if (cronSecret && req.headers['authorization'] !== `Bearer ${cronSecret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
+  // SSE setup
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
   try {
-    console.log('[cron/digest] Starting');
-    const emails = await gmail.fetchNewsletterEmails();
-    console.log(`[cron/digest] Fetched ${emails.length} emails`);
-    const digest = await digestGen.generateDigest(emails);
-    await storage.setLastRun({ ...digest, ranAt: new Date().toISOString() });
-    console.log(`[cron/digest] Done — ${digest.date}`);
-    res.json({ success: true, date: digest.date, emailCount: emails.length });
+    const { model } = await storage.getSettings();
+    console.log(`[cron/digest] Starting with model: ${model}`);
+
+    send('status', { message: 'Fetching emails…' });
+    const { entries, cacheHits, cacheMisses } = await gmail.fetchNewsletterHeadlines();
+    send('status', { message: `${entries.length} newsletters (${cacheHits} cached, ${cacheMisses} new). Clustering…` });
+
+    const clusters = await clusterer.clusterHeadlines(entries, model);
+    await storage.setClusters({ clusters, generatedAt: new Date().toISOString() });
+    send('status', { message: `${clusters.length} unique stories. Checking read history…` });
+
+    let readState = {};
+    try { readState = await supa.getClusterReadState(); } catch (e) { console.warn('[read-state]', e.message); }
+
+    send('status', { message: 'Generating digest…' });
+    const digest = await digestGen.generateDigest(clusters, model, readState);
+    await storage.setLastRun({ ...digest, ranAt: new Date().toISOString(), model });
+    send('done', digest);
+
+    console.log(`[cron/digest] Done — ${digest.date} | ${clusters.length} clusters → digest`);
   } catch (err) {
     console.error('[cron/digest] Error:', err.message);
-    res.status(500).json({ error: err.message });
+    send('error', { error: err.message });
+  } finally {
+    res.end();
   }
 });
 
