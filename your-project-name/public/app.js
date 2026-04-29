@@ -64,25 +64,34 @@ function renderInnerTabs(data) {
   const nav = document.querySelector('.inner-tabs');
   if (!nav) return;
 
-  // Pull custom-section labels from settings (cached in app load) — fallback to keys
-  const sectionLabels = (window._settingsSections || []).reduce((m, s) => {
+  // Pull section metadata from settings (cached in app load):
+  // - sectionLabels: id → label (for custom tab name display)
+  // - disabledSections: set of ids that have been toggled off
+  const settingsSections = window._settingsSections || [];
+  const sectionLabels = settingsSections.reduce((m, s) => {
     if (s.id && s.label) m[s.id] = s.label;
     return m;
   }, {});
+  const disabledSections = new Set(
+    settingsSections.filter(s => s.enabled === false).map(s => s.id)
+  );
 
-  const presentDefaults = DEFAULT_TAB_ORDER.filter(k => Array.isArray(data[k]) && data[k].length > 0);
+  const presentDefaults = DEFAULT_TAB_ORDER.filter(k =>
+    Array.isArray(data[k]) && data[k].length > 0 && !disabledSections.has(k)
+  );
   // Always show top_today even if empty so it's a stable home tab
   if (!presentDefaults.includes('top_today')) presentDefaults.unshift('top_today');
 
   const customKeys = Object.keys(data)
-    .filter(k => k.startsWith('custom_') && Array.isArray(data[k]) && data[k].length > 0);
+    .filter(k => k.startsWith('custom_') && Array.isArray(data[k]) && data[k].length > 0 && !disabledSections.has(k));
 
   const allCats = [...presentDefaults, ...customKeys];
   // If currentCat no longer exists in this digest, fall back to top_today
   if (!allCats.includes(currentCat)) currentCat = 'top_today';
 
   nav.innerHTML = allCats.map(cat => {
-    const label = CAT_LABELS[cat] || sectionLabels[cat] || cat.replace(/_/g, ' ');
+    // For custom sections, prefer the saved label from settings over the raw key
+    const label = CAT_LABELS[cat] || sectionLabels[cat] || cat.replace(/^custom_\d+$/, 'Custom').replace(/_/g, ' ');
     const active = cat === currentCat ? ' active' : '';
     return `<button class="inner-tab${active}" data-cat="${cat}">${label.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</button>`;
   }).join('');
@@ -1518,11 +1527,13 @@ function renderChartOfDay(el, data) {
 
 /* ── Init ── */
 (async () => {
+  // loadModel must run before loadLastRun so that window._settingsSections
+  // (disabled tabs + custom labels) is ready before renderInnerTabs is called.
+  await loadModel();
   await loadSources();
   await loadClusters();
   await loadLastRun();
   await loadInboxStatus();
-  await loadModel();
   await loadPersona();
   await loadNotebook();
   await loadDateRolodex();
