@@ -506,7 +506,9 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/api/cron/digest', async (req, res) => {
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  const authHeader = req.headers['authorization'];
+  const querySecret = req.query.secret;
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}` && querySecret !== cronSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
