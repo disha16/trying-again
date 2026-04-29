@@ -58,6 +58,22 @@ app.delete('/sources/:id', async (req, res) => {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
+// ─── Temporary debug: check Supabase storage keys ─────────────────────────────
+app.get('/api/debug-storage', async (req, res) => {
+  try {
+    const tokens = await storage.getGmailTokens();
+    const settings = await storage.getSettings();
+    res.json({
+      gmail_tokens_present: source /home/ubuntu/.user_env && cd . && cat /home/ubuntu/trying-again/your-project-name/lib/storage.js 2>&1 | head -120(tokens && tokens.access_token),
+      gmail_email: tokens ? tokens.email || 'unknown' : null,
+      settings_model: settings.clusterModel,
+      settings_anthropic_key_set: source /home/ubuntu/.user_env && cd . && cat /home/ubuntu/trying-again/your-project-name/lib/storage.js 2>&1 | head -120(settings.anthropicApiKey),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/settings', async (req, res) => {
   const s = await storage.getSettings();
   // Don't echo the raw API key back to the client; just signal whether it's set
