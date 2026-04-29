@@ -544,9 +544,13 @@ app.get('/api/cron/digest', async (req, res) => {
   try {
     const settings     = await storage.getSettings();
     const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
-    const digestModel  = settings.digestModel  || DEFAULT_MODEL;
-    const clusterModel = settings.clusterModel || DEFAULT_MODEL;
-    const editorModel  = settings.editorModel  || digestModel;
+    const _dm = settings.digestModel  || DEFAULT_MODEL;
+    const _cm = settings.clusterModel || DEFAULT_MODEL;
+    const _em = settings.editorModel  || _dm;
+    // claude-cli is not available on Vercel — fall back to Llama
+    const digestModel  = _dm  === 'claude-cli' ? DEFAULT_MODEL : _dm;
+    const clusterModel = _cm  === 'claude-cli' ? DEFAULT_MODEL : _cm;
+    const editorModel  = _em  === 'claude-cli' ? DEFAULT_MODEL : _em;
     // Extract enabled custom sections from settings
     const customSections = (settings.sections || []).filter(s => s.custom && s.enabled !== false);
     console.log(`[cron/digest] cluster: ${clusterModel}, digest: ${digestModel}, editor: ${editorModel}, custom: ${customSections.map(s=>s.label).join(',') || 'none'}`);
