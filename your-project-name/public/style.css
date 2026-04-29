@@ -104,6 +104,26 @@ header {
   font-family: inherit;
   font-style: normal;
 }
+/* ── All tab section headers share the same elegant style ── */
+.tab-content > h2,
+.tab-content > div > h2,
+.nb-header h2,
+.chat-header-row h2 {
+  font-size: 1.4rem;
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: -.3px;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  margin-bottom: 4px;
+}
+.tab-content > h2 em,
+.tab-content > div > h2 em,
+.nb-header h2 em,
+.chat-header-row h2 em {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--accent);
+}
 
 .btn-primary {
   background: linear-gradient(135deg, var(--peach-mid) 0%, var(--accent) 100%);

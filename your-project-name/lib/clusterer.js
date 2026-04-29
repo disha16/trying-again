@@ -1,6 +1,6 @@
 'use strict';
 
-const { getClient, callClaudeCLI } = require('./digest-generator');
+const { getClient, callClaudeCLI, callAnthropic, ANTHROPIC_MODELS } = require('./digest-generator');
 
 async function withRetry(fn, retries = 3) {
   for (let i = 0; i < retries; i++) {
@@ -42,6 +42,9 @@ async function _callModel(model, prompt) {
   if (model === 'claude-cli') {
     console.log('[cluster] model: claude-cli (subprocess)');
     return callClaudeCLI(SYSTEM, prompt);
+  }
+  if (ANTHROPIC_MODELS.includes(model)) {
+    return callAnthropic(model, SYSTEM, prompt);
   }
   const client = getClient(model);
   const res = await client.chat.completions.create({
