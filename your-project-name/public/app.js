@@ -47,7 +47,7 @@ function renderDigest(data) {
   $('#digestArea').classList.remove('hidden');
 
   const date = data.date || '—';
-  $('#digestTitle').textContent = `Newsletter Digest — ${date}`;
+  $('#digestTitle').innerHTML = `<em>today's digest</em> <span class="digest-date-label">— ${date}</span>`;
   const ran = data.ranAt
     ? new Date(data.ranAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : '';

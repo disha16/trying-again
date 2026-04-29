@@ -41,22 +41,15 @@ header {
   box-shadow: 0 1px 0 rgba(212,116,90,.08);
   display: flex;
   align-items: center;
-  gap: 20px;
-  padding: 0 28px;
+  gap: 0;
+  padding: 0 16px;
   height: 52px;
   position: sticky;
   top: 0;
   z-index: 100;
 }
 
-.app-title {
-  font-weight: 700;
-  font-size: 1rem;
-  white-space: nowrap;
-  color: var(--accent);
-  letter-spacing: .5px;
-  text-transform: uppercase;
-}
+
 
 .tabs { display: flex; gap: 2px; }
 
@@ -75,13 +68,7 @@ header {
 .tab:hover { color: var(--text); background: var(--surface-2); }
 .tab.active { color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 
-.claude-badge {
-  margin-left: auto;
-  font-size: .7rem;
-  color: var(--muted);
-  letter-spacing: .4px;
-  white-space: nowrap;
-}
+
 
 /* ── Tab sections ── */
 .tab-content {
@@ -99,10 +86,23 @@ header {
   gap: 16px;
 }
 .digest-header h2 {
-  font-size: 1.35rem;
-  font-weight: 700;
+  font-size: 1.4rem;
+  font-weight: 400;
   color: var(--text);
-  letter-spacing: -.2px;
+  letter-spacing: -.3px;
+  font-family: 'Georgia', 'Times New Roman', serif;
+}
+.digest-header h2 em {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--accent);
+}
+.digest-date-label {
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--muted);
+  font-family: inherit;
+  font-style: normal;
 }
 
 .btn-primary {
