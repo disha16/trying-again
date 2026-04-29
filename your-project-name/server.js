@@ -485,9 +485,19 @@ app.get('/auth/callback', async (req, res) => {
   if (!code)  return res.status(400).send('Missing code');
   try {
     await gmail.handleCallback(code);
-    res.send('<h2>✅ Gmail connected!</h2><p>The daily digest will now run automatically at 9am ET. You can close this tab.</p>');
+    res.send('<h2>✅ Gmail connected!</h2><p>The daily digest will run automatically at 3pm ET. You can close this tab.</p>');
   } catch (err) {
     console.error('[auth/callback]', err.message);
+    // If invalid_grant, the code may have already been exchanged (Vercel retry / double-invoke).
+    // Check if tokens already exist in Supabase — if so, treat as success.
+    if (err.message && err.message.includes('invalid_grant')) {
+      try {
+        const existing = await storage.getGmailTokens();
+        if (existing && existing.access_token) {
+          return res.send('<h2>✅ Gmail already connected!</h2><p>The daily digest will run automatically at 3pm ET. You can close this tab.</p>');
+        }
+      } catch (_) {}
+    }
     res.status(500).send(`Auth failed: ${err.message}`);
   }
 });
