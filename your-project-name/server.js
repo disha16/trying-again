@@ -64,10 +64,10 @@ app.get('/api/debug-storage', async (req, res) => {
     const tokens = await storage.getGmailTokens();
     const settings = await storage.getSettings();
     res.json({
-      gmail_tokens_present: source /home/ubuntu/.user_env && cd . && cat /home/ubuntu/trying-again/your-project-name/lib/storage.js 2>&1 | head -120(tokens && tokens.access_token),
+      gmail_tokens_present: !!(tokens && tokens.access_token),
       gmail_email: tokens ? tokens.email || 'unknown' : null,
       settings_model: settings.clusterModel,
-      settings_anthropic_key_set: source /home/ubuntu/.user_env && cd . && cat /home/ubuntu/trying-again/your-project-name/lib/storage.js 2>&1 | head -120(settings.anthropicApiKey),
+      settings_anthropic_key_set: !!(settings.anthropicApiKey),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
