@@ -198,6 +198,20 @@ app.post('/api/mark-read', async (req, res) => {
   }
 });
 
+
+// ─── Story feedback ────────────────────────────────────────────────────────────
+app.post('/api/feedback', async (req, res) => {
+  try {
+    const { headline, category, source, vote, dateKey } = req.body;
+    if (!headline || !['up','down'].includes(vote))
+      return res.status(400).json({ error: 'headline and vote (up/down) required' });
+    const now = new Date();
+    const dk = dateKey || `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    await storage.addFeedback(dk, { headline, category, source, vote, at: now.toISOString() });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/read-history', async (req, res) => {
   try {
     const history = await supa.getReadHistory(3);
@@ -500,6 +514,23 @@ app.get('/api/cron/digest', async (req, res) => {
   }
   digestRunning = true;
 
+  // ── Smart caching: after 3 PM ET, serve from digest_cache if available ──────
+  const _now = new Date();
+  const _etHour = (_now.getUTCHours() - 4 + 24) % 24; // UTC-4 (EDT)
+  const _todayKey = `${_now.getUTCFullYear()}-${String(_now.getUTCMonth()+1).padStart(2,'0')}-${String(_now.getUTCDate()).padStart(2,'0')}`;
+  if (_etHour >= 15) {
+    try {
+      const _cached = await supa.getDigest(_todayKey);
+      if (_cached && _cached.digest) {
+        send('status', { message: 'Serving from cache (post-3 PM)\u2026' });
+        send('done', _cached.digest);
+        res.end();
+        digestRunning = false;
+        return;
+      }
+    } catch (_e) { console.warn('[cron/digest] cache check failed, running fresh:', _e.message); }
+  }
+
   try {
     const settings     = await storage.getSettings();
     const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
@@ -527,7 +558,11 @@ app.get('/api/cron/digest', async (req, res) => {
     try { readState = await supa.getClusterReadState(); } catch (e) { console.warn('[read-state]', e.message); }
 
     send('status', { message: 'Generating digest…' });
-    const digest = await digestGen.generateDigest(clusters, digestModel, readState, customSections, settings.persona || null);
+    // Inject quality note from prior-day feedback if available
+    let _qualityNote = null;
+    try { _qualityNote = await storage.getQualityNote(); } catch (_e) {}
+    const _personaWithNote = { ...(settings.persona || {}), _qualityNote };
+    const digest = await digestGen.generateDigest(clusters, digestModel, readState, customSections, _personaWithNote);
 
     send('status', { message: 'Editor reviewing for duplicates…' });
     await editor.editDigest(digest, editorModel, customSections, settings.persona || null);
@@ -641,6 +676,38 @@ app.get('/api/cron/digest', async (req, res) => {
   } finally {
     digestRunning = false;
     res.end();
+  }
+});
+
+
+// ─── Cron — quality check (2:30 PM ET = 18:30 UTC) ───────────────────────────
+app.get('/api/cron/quality-check', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    // Get yesterday's date key
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const dk = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
+    const feedback = await storage.getFeedback(dk);
+    if (!feedback.length) {
+      return res.json({ ok: true, note: null, message: 'No feedback for yesterday' });
+    }
+    const ups   = feedback.filter(f => f.vote === 'up').map(f => `👍 "${f.headline}" (${f.category})`);
+    const downs = feedback.filter(f => f.vote === 'down').map(f => `👎 "${f.headline}" (${f.category})`);
+    const feedbackText = [...ups, ...downs].join('\n');
+    const settings = await storage.getSettings();
+    const model = (settings.digestModel === 'claude-cli' ? 'llama-3.3-70b-versatile' : settings.digestModel) || 'llama-3.3-70b-versatile';
+    const system = `You are a quality analyst for a newsletter digest app. The user has rated stories from yesterday's digest with thumbs up/down. Condense their feedback into 3-5 concise, actionable instructions that can be injected into tomorrow's digest generation prompts to better match their preferences. Be specific. Output only the instructions as a short paragraph, no preamble.`;
+    const prompt = `Yesterday's feedback (${dk}):\n${feedbackText}\n\nCondense into 3-5 actionable instructions for the digest generator:`;
+    const note = await digestGen._callModel(model, prompt, system);
+    await storage.setQualityNote({ text: note.trim(), generatedAt: new Date().toISOString(), basedOn: dk, feedbackCount: feedback.length });
+    console.log('[quality-check] note saved:', note.slice(0, 120));
+    res.json({ ok: true, note: note.trim(), feedbackCount: feedback.length });
+  } catch (e) {
+    console.error('[quality-check] error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

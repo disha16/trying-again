@@ -934,3 +934,10 @@ code {
 .te-item { display: flex; gap: 12px; align-items: flex-start; font-size: .83rem; color: var(--muted); line-height: 1.5; }
 .te-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
 .te-item strong { color: var(--text); }
+
+/* ── Story feedback buttons ─────────────────────────────────────────────────── */
+.deck-feedback { opacity: 0.55; transition: opacity 0.15s, transform 0.15s; }
+.deck-feedback:hover { opacity: 1; transform: scale(1.15); }
+.deck-feedback.voted { opacity: 1; transform: scale(1.2); filter: drop-shadow(0 0 4px rgba(255,255,255,0.4)); }
+.deck-up.voted   { color: #4ade80; }
+.deck-down.voted { color: #f87171; }

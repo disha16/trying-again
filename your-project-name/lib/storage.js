@@ -90,6 +90,20 @@ const setNotes         = notes => setKey('notes', notes);
 const getDigestHistory = ()    => getKey('digestHistory').then(v => v ?? {});
 const setDigestHistory = h     => setKey('digestHistory', h);
 
+// ── Story feedback (stored in kv_store as feedback:YYYY-MM-DD arrays) ──────────
+async function getFeedback(dateKey) {
+  return getKey(`feedback:${dateKey}`).then(v => v ?? []);
+}
+async function addFeedback(dateKey, entry) {
+  const list = await getFeedback(dateKey);
+  const idx = list.findIndex(f => f.headline === entry.headline);
+  if (idx >= 0) list[idx] = entry; else list.push(entry);
+  await setKey(`feedback:${dateKey}`, list);
+}
+// ── Quality check note (condensed from prior-day feedback, injected into prompts) ──
+const getQualityNote = () => getKey('qualityNote').then(v => v ?? null);
+const setQualityNote = note => setKey('qualityNote', note);
+
 module.exports = {
   isVercel: true, // always true now — kept for backward compat
   getKey, setKey,
@@ -102,4 +116,6 @@ module.exports = {
   getEmailCache, setEmailCache,
   getNotes, setNotes,
   getDigestHistory, setDigestHistory,
+  getFeedback, addFeedback,
+  getQualityNote, setQualityNote,
 };

@@ -212,6 +212,8 @@ function renderDeck() {
         <div class="deck-footer">
           ${badge}
           <div class="deck-actions">
+            <button class="deck-btn deck-feedback deck-up"   title="Good story" data-vote="up">👍</button>
+            <button class="deck-btn deck-feedback deck-down" title="Not for me"  data-vote="down">👎</button>
             <button class="deck-btn deck-chat"     title="Ask about this story">💬</button>
             <button class="deck-btn deck-notebook" title="Add to notebook">📓</button>
             <button class="deck-btn deck-skip"     title="Skip">→</button>
@@ -254,6 +256,23 @@ function renderDeck() {
   panel.querySelector('.deck-active .deck-skip')?.addEventListener('click', () => advanceDeck(false));
   panel.querySelector('.deck-active .deck-chat')?.addEventListener('click', () => openChatFromCard(deckItems[deckIndex]));
   panel.querySelector('.deck-active .deck-notebook')?.addEventListener('click', () => openNotebookModal(deckItems[deckIndex]));
+  panel.querySelectorAll('.deck-active .deck-feedback').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = deckItems[deckIndex];
+      if (!item) return;
+      const vote = btn.dataset.vote;
+      // Visual feedback — highlight the voted button
+      panel.querySelectorAll('.deck-active .deck-feedback').forEach(b => b.classList.remove('voted'));
+      btn.classList.add('voted');
+      const now = new Date();
+      const dk = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headline: item.headline, category: currentCat, source: item.source, vote, dateKey: dk }),
+      }).catch(() => {});
+    });
+  });
 }
 
 function startReadTimer() {

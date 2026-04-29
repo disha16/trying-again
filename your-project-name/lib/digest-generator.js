@@ -145,6 +145,10 @@ function personaInstructions(persona) {
   if (persona.speed === 'analysis') lines.push('- In descriptions, lean toward consequences and context over the bare event');
   if (persona.speed === 'brief') lines.push('- In descriptions, keep sentences tight and scannable');
   if (persona.format === 'numbers') lines.push('- In descriptions, include specific numbers/percentages/figures when the cluster mentions them');
+  // Inject quality note from prior-day feedback if available
+  if (persona._qualityNote && persona._qualityNote.text) {
+    lines.push(`\n--- Quality note from yesterday's feedback (apply these preferences) ---\n${persona._qualityNote.text}\n---`);
+  }
   if (!lines.length) return '';
   return `\nReader-preference layer (use these to break ties and shape DESCRIPTIONS, never to drop clusters):\n${lines.join('\n')}`;
 }
