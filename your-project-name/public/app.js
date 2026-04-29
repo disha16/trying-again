@@ -807,7 +807,7 @@ async function loadReadMap() {
     </div>`).join('');
 }
 
-$('[data-tab="readmap"]').addEventListener('click', loadReadMap);
+$('[data-tab="settings"]').addEventListener('click', loadReadMap);
 
 /* ── Clusters — used to enrich digest items with keywords + images ── */
 let clusterData  = [];

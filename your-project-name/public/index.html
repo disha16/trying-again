@@ -16,7 +16,6 @@
       <button class="tab" data-tab="chat">Chat</button>
       <button class="tab" data-tab="notebook">Notebook</button>
       <button class="tab" data-tab="sources">Sources</button>
-      <button class="tab" data-tab="readmap">Read Map</button>
       <button class="tab" data-tab="persona">Persona</button>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
@@ -120,21 +119,6 @@
       </div>
     </div>
   </div>
-
-  <!-- ─── READ MAP TAB ─── -->
-  <section class="tab-content hidden" id="tab-readmap">
-    <h2>Read Map</h2>
-    <p class="meta">Stories you've read today, grouped by cluster topic.</p>
-    <div id="readMapList" class="cluster-list"></div>
-
-    <div class="tab-explainer">
-      <div class="tab-explainer-title">How Read Map works</div>
-      <div class="tab-explainer-items">
-        <div class="te-item"><span class="te-icon">🗺️</span><div><strong>Auto-tracks reading</strong> — any card you spend 5+ seconds on is marked as read.</div></div>
-        <div class="te-item"><span class="te-icon">🧩</span><div><strong>Grouped by topic</strong> — stories are clustered so you can see which themes you've been following.</div></div>
-      </div>
-    </div>
-  </section>
 
   <!-- ─── SOURCES TAB ─── -->
   <section class="tab-content hidden" id="tab-sources">
@@ -439,6 +423,13 @@
         </div>
         <button id="openTrainerBtn" class="btn-primary">Open Trainer →</button>
       </div>
+    </div>
+
+    <!-- ─── Read Map (inline in Settings) ─── -->
+    <div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)">
+      <div style="font-weight:700;font-size:.95rem;margin-bottom:4px">Read Map</div>
+      <p class="meta" style="margin-bottom:12px">Stories you've read today, grouped by topic.</p>
+      <div id="readMapList" class="cluster-list"></div>
     </div>
 
     <div class="tab-explainer">
