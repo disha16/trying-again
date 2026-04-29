@@ -503,7 +503,7 @@ $('#refreshBtn').addEventListener('click', () => {
 
   // EventSource can't send headers; pass secret as query param
   const _cronSecret = 'newsletter-digest-cron-2026';
-  const es = new EventSource(`/api/cron/digest?secret=${encodeURIComponent(_cronSecret)}`);
+  const es = new EventSource('/api/run-digest');
 
   es.addEventListener('status', e => {
     const { message } = JSON.parse(e.data);
@@ -573,6 +573,9 @@ async function loadModel() {
   }
   const toggle = $('#internetFallbackToggle');
   if (toggle) toggle.checked = s.internetFallback !== false;
+  const imgToggle = $('#showImagesToggle');
+  if (imgToggle) imgToggle.checked = s.showImages !== false;
+  applyImagesPreference(s.showImages !== false);
 }
 
 function showSaveStatus(text) {
@@ -597,6 +600,19 @@ for (const id of MODEL_PICKERS) {
   });
 }
 
+function applyImagesPreference(show) {
+  document.documentElement.classList.toggle('hide-images', !show);
+}
+$('#showImagesToggle')?.addEventListener('change', async e => {
+  const show = e.target.checked;
+  applyImagesPreference(show);
+  await fetch('/api/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ showImages: show }),
+  });
+  showSaveStatus(show ? 'Images on' : 'Images & chart off');
+});
 $('#internetFallbackToggle')?.addEventListener('change', async e => {
   await fetch('/api/settings', {
     method:  'POST',

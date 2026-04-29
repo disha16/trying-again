@@ -80,6 +80,7 @@ app.post('/api/settings', async (req, res) => {
     update[key] = req.body[key];
   }
   if (req.body.internetFallback !== undefined) update.internetFallback = !!req.body.internetFallback;
+  if (req.body.showImages !== undefined) update.showImages = !!req.body.showImages;
   if (req.body.persona   !== undefined) update.persona   = req.body.persona;
   if (req.body.sections  !== undefined) update.sections  = req.body.sections;
   if (req.body.anthropicApiKey !== undefined) {
@@ -502,16 +503,8 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// ─── Cron — auto digest ────────────────────────────────────────────────────────
-
-app.get('/api/cron/digest', async (req, res) => {
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = req.headers['authorization'];
-  const querySecret = req.query.secret;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}` && querySecret !== cronSecret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+// ─── Shared digest runner (used by both cron and browser) ─────────────────────
+async function runDigestSSE(req, res) {
   // SSE setup
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -693,8 +686,22 @@ app.get('/api/cron/digest', async (req, res) => {
     digestRunning = false;
     res.end();
   }
+
+}
+
+// ─── Cron — auto digest (protected, called by Vercel scheduler) ───────────────
+app.get('/api/cron/digest', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET;
+  const authHeader = req.headers['authorization'];
+  const querySecret = req.query.secret;
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}` && querySecret !== cronSecret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  return runDigestSSE(req, res);
 });
 
+// ─── Browser-initiated digest run (no auth required — Gmail tokens are the gate) ─
+app.get('/api/run-digest', (req, res) => runDigestSSE(req, res));
 
 // ─── Cron — quality check (2:30 PM ET = 18:30 UTC) ───────────────────────────
 app.get('/api/cron/quality-check', async (req, res) => {
