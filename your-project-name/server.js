@@ -92,8 +92,16 @@ app.post('/api/settings', async (req, res) => {
 });
 
 // ─── Digest cache ──────────────────────────────────────────────────────────────
-
-app.get('/last-run',      async (req, res) => res.json(await storage.getLastRun()));
+// /last-run: serve from Supabase digest_cache (most recent) then fall back to kv_store lastRun
+app.get('/last-run', async (req, res) => {
+  try {
+    const cached = await supa.getLatestDigest();
+    if (cached) return res.json(cached.digest);
+  } catch (e) {
+    console.warn('[last-run] digest_cache read failed, falling back to kv_store:', e.message);
+  }
+  res.json(await storage.getLastRun());
+});
 app.get('/api/clusters',  async (req, res) => res.json(await storage.getClusters()));
 app.get('/api/digest-history', async (req, res) => {
   const h       = await storage.getDigestHistory();
@@ -572,6 +580,11 @@ app.get('/api/cron/digest', async (req, res) => {
     digest.clusterModel = clusterModel;
     digest.digestModel  = digestModel;
     await storage.setLastRun(digest);
+    // Compute dateKey for digest_cache
+    const _dcY = now.getFullYear(), _dcM = String(now.getMonth()+1).padStart(2,'0'), _dcD = String(now.getDate()).padStart(2,'0');
+    const dateKey = `${_dcY}-${_dcM}-${_dcD}`;
+    // Persist core digest to Supabase digest_cache immediately
+    await supa.saveDigest(dateKey, digest, false).catch(e => console.error('[cron/digest] digest_cache core save:', e.message));
     const merged = await storage.getLastRun(); // includes carried-over enrichment
     send('done', merged); // Unblock the UI immediately
 
@@ -600,6 +613,8 @@ app.get('/api/cron/digest', async (req, res) => {
         }
 
         await storage.setLastRun(digest);
+        // Persist fully-enriched digest to Supabase digest_cache
+        await supa.saveDigest(dateKey, digest, true).catch(e => console.error('[cron/digest] digest_cache enriched save:', e.message));
         // Re-archive history with the enriched digest so /api/digest/<date> matches /last-run
         const histAfter = await storage.getDigestHistory();
         histAfter[dateKey] = digest;
@@ -610,8 +625,6 @@ app.get('/api/cron/digest', async (req, res) => {
       }
     };
     // Archive core digest to history immediately (will be re-archived when enrichment finishes)
-    const _y = now.getFullYear(), _m = String(now.getMonth()+1).padStart(2,'0'), _d = String(now.getDate()).padStart(2,'0');
-    const dateKey = `${_y}-${_m}-${_d}`;
     const history = await storage.getDigestHistory();
     history[dateKey] = digest;
     const keys = Object.keys(history).sort().slice(-30);

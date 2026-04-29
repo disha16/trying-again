@@ -1,63 +1,49 @@
 'use strict';
+/**
+ * Storage layer — backed entirely by Supabase kv_store table.
+ * No local file system, no Vercel KV.
+ * Table schema: kv_store(key TEXT primary key, value JSONB, updated_at TIMESTAMPTZ)
+ */
+const { createClient } = require('@supabase/supabase-js');
 
-const fs   = require('fs');
-const path = require('path');
-
-const DATA_FILE = path.join(__dirname, '..', 'data.json');
-const isVercel  = !!process.env.KV_REST_API_URL;
-
-// ── Local JSON helpers ────────────────────────────────────────────────────────
-
-function fileLoad() {
-  if (fs.existsSync(DATA_FILE)) {
-    try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
+let _client = null;
+function getClient() {
+  if (!_client) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+    if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
+    _client = createClient(url, key, { auth: { persistSession: false } });
   }
-  return { sources: [], lastRun: null };
+  return _client;
 }
 
-function fileSave(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-// ── KV helpers (lazy-required so local dev never needs @vercel/kv) ────────────
-
-async function kvGet(key) {
-  const { kv } = require('@vercel/kv');
-  return kv.get(key);
-}
-
-async function kvSet(key, value) {
-  const { kv } = require('@vercel/kv');
-  return kv.set(key, value);
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
-
+// ── Generic KV helpers ────────────────────────────────────────────────────────
 async function getKey(key) {
-  if (isVercel) return kvGet(key);
-  return fileLoad()[key] ?? null;
+  const { data, error } = await getClient()
+    .from('kv_store')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle();
+  if (error) throw new Error(`[storage.getKey] ${key}: ${error.message}`);
+  return data ? data.value : null;
 }
 
 async function setKey(key, value) {
-  if (isVercel) return kvSet(key, value);
-  const data = fileLoad();
-  data[key] = value;
-  fileSave(data);
+  const { error } = await getClient()
+    .from('kv_store')
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  if (error) throw new Error(`[storage.setKey] ${key}: ${error.message}`);
 }
 
-const getSources       = ()  => getKey('sources').then(v => v ?? []);
-const setSources       = arr => setKey('sources', arr);
-const getLastRun       = ()  => getKey('lastRun');
+// ── Public API ────────────────────────────────────────────────────────────────
+const getSources = () => getKey('sources').then(v => v ?? []);
+const setSources = arr => setKey('sources', arr);
 
-// Enrichment fields live alongside the core digest in lastRun, but they're produced
-// asynchronously (background enrichment) and shouldn't be wiped when a new core
-// digest is saved. setLastRun merges into existing lastRun at the top level.
-// On date change, stale enrichment is auto-cleared so we don't show yesterday's
-// deep dives next to today's headlines.
-// Fields that go stale when the digest's date changes (clear them).
-// Note: chartOfDay is keyed by dateKey internally, so it's preserved across days.
+const getLastRun = () => getKey('lastRun');
+
+// Enrichment fields are produced asynchronously; don't wipe them on a new core save.
+// On date change, stale enrichment is auto-cleared.
 const ENRICHMENT_FIELDS = ['topic_clusters', 'charts'];
-
 async function setLastRun(d, opts = {}) {
   if (opts.replace) return setKey('lastRun', d);
   const existing = (await getKey('lastRun')) || {};
@@ -69,10 +55,12 @@ async function setLastRun(d, opts = {}) {
   }
   return setKey('lastRun', merged);
 }
-const getInboxSnapshot = ()  => getKey('inboxSnapshot');
-const setInboxSnapshot = s   => setKey('inboxSnapshot', s);
-const getGmailTokens   = ()  => getKey('gmail_tokens');
-const setGmailTokens   = t   => setKey('gmail_tokens', t);
+
+const getInboxSnapshot = () => getKey('inboxSnapshot');
+const setInboxSnapshot = s  => setKey('inboxSnapshot', s);
+const getGmailTokens   = () => getKey('gmail_tokens');
+const setGmailTokens   = t  => setKey('gmail_tokens', t);
+
 const DEFAULT_SETTINGS = {
   clusterModel:     'llama-3.3-70b-versatile',
   digestModel:      'llama-3.3-70b-versatile',
@@ -81,34 +69,29 @@ const DEFAULT_SETTINGS = {
   internetFallback: true,
 };
 const getSettings = () => getKey('settings').then(v => ({ ...DEFAULT_SETTINGS, ...(v ?? {}) }));
-const setSettings      = s   => setKey('settings', s);
-const getClusters      = ()  => getKey('clusters');
-const setClusters      = c   => setKey('clusters', c);
+const setSettings = s  => setKey('settings', s);
+
+const getClusters = () => getKey('clusters');
+const setClusters = c  => setKey('clusters', c);
 
 // Email headline cache — keyed by Gmail message ID
-// Shape: { [msgId]: { source, headlines: string[], cachedAt: isoString } }
 async function getEmailCache() {
   const cache = await getKey('emailCache');
   if (!cache) return {};
-  // Evict entries older than 7 days
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const fresh  = Object.fromEntries(
+  return Object.fromEntries(
     Object.entries(cache).filter(([, v]) => new Date(v.cachedAt).getTime() > cutoff)
   );
-  return fresh;
 }
+const setEmailCache = cache => setKey('emailCache', cache);
 
-async function setEmailCache(cache) {
-  return setKey('emailCache', cache);
-}
-
-const getNotes        = ()        => getKey('notes').then(v => v ?? []);
-const setNotes        = (notes)   => setKey('notes', notes);
-const getDigestHistory = ()       => getKey('digestHistory').then(v => v ?? {});
-const setDigestHistory = (h)      => setKey('digestHistory', h);
+const getNotes         = ()    => getKey('notes').then(v => v ?? []);
+const setNotes         = notes => setKey('notes', notes);
+const getDigestHistory = ()    => getKey('digestHistory').then(v => v ?? {});
+const setDigestHistory = h     => setKey('digestHistory', h);
 
 module.exports = {
-  isVercel,
+  isVercel: true, // always true now — kept for backward compat
   getKey, setKey,
   getSources, setSources,
   getLastRun, setLastRun,
