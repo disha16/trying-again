@@ -91,20 +91,6 @@ app.post('/api/settings', async (req, res) => {
   res.json({ success: true });
 });
 
-// ─── Temporary debug endpoint ─────────────────────────────────────────────────
-app.get('/api/debug-anthropic', async (req, res) => {
-  const s = await storage.getSettings();
-  const fromSettings = s?.anthropicApiKey || '';
-  const fromEnv = process.env.ANTHROPIC_API_KEY || '';
-  res.json({
-    settingsKeySet: !!fromSettings,
-    settingsKeyPrefix: fromSettings ? fromSettings.slice(0, 20) : '',
-    envKeySet: !!fromEnv,
-    envKeyPrefix: fromEnv ? fromEnv.slice(0, 20) : '',
-    clusterModel: s?.clusterModel,
-    digestModel: s?.digestModel,
-  });
-});
 // ─── Digest cache ──────────────────────────────────────────────────────────────
 // /last-run: serve from Supabase digest_cache (most recent) then fall back to kv_store lastRun
 app.get('/last-run', async (req, res) => {
