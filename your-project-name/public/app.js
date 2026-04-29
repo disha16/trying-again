@@ -17,6 +17,8 @@ $$('.tab').forEach(btn => {
     const section = $(`#tab-${btn.dataset.tab}`);
     section.classList.remove('hidden');
     section.classList.add('active');
+    // Refresh notebook data whenever the tab is opened
+    if (btn.dataset.tab === 'notebook') loadNotebook();
   });
 });
 
@@ -51,7 +53,39 @@ function renderDigest(data) {
     : '';
   $('#digestMeta').textContent = ran ? `Last updated: ${ran}` : '';
 
+  renderInnerTabs(data);
   renderCategory(currentCat);
+}
+
+// Build the section-tab strip dynamically so custom sections (e.g. Entertainment)
+// show up alongside the defaults. Order: top_today → defaults present in data → custom sections.
+const DEFAULT_TAB_ORDER = ['top_today', 'tech', 'us_business', 'india_business', 'global_economies', 'politics', 'everything_else'];
+function renderInnerTabs(data) {
+  const nav = document.querySelector('.inner-tabs');
+  if (!nav) return;
+
+  // Pull custom-section labels from settings (cached in app load) — fallback to keys
+  const sectionLabels = (window._settingsSections || []).reduce((m, s) => {
+    if (s.id && s.label) m[s.id] = s.label;
+    return m;
+  }, {});
+
+  const presentDefaults = DEFAULT_TAB_ORDER.filter(k => Array.isArray(data[k]) && data[k].length > 0);
+  // Always show top_today even if empty so it's a stable home tab
+  if (!presentDefaults.includes('top_today')) presentDefaults.unshift('top_today');
+
+  const customKeys = Object.keys(data)
+    .filter(k => k.startsWith('custom_') && Array.isArray(data[k]) && data[k].length > 0);
+
+  const allCats = [...presentDefaults, ...customKeys];
+  // If currentCat no longer exists in this digest, fall back to top_today
+  if (!allCats.includes(currentCat)) currentCat = 'top_today';
+
+  nav.innerHTML = allCats.map(cat => {
+    const label = CAT_LABELS[cat] || sectionLabels[cat] || cat.replace(/_/g, ' ');
+    const active = cat === currentCat ? ' active' : '';
+    return `<button class="inner-tab${active}" data-cat="${cat}">${label.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</button>`;
+  }).join('');
 }
 
 /* ── Card Deck ── */
@@ -67,6 +101,72 @@ function renderCategory(cat) {
   deckItems = (digestData?.[cat]) || [];
   deckIndex = 0;
   renderDeck();
+  renderTopics(digestData?.[cat] || []);
+  if (cat === 'top_today') {
+    renderTopicClusters(digestData?.topic_clusters || []);
+    loadChartsOfDay();
+  } else {
+    $('#topicClusters').classList.add('hidden');
+    $('#chartsOfDay').classList.add('hidden');
+  }
+}
+
+/* ── Topics block ── */
+let activeTopicFilter = null;
+
+function renderTopics(items) {
+  const block = $('#topicsBlock');
+  const chipsEl = $('#topicChips');
+  const storiesEl = $('#topicStories');
+  if (!items.length) { block.classList.add('hidden'); return; }
+
+  // Collect unique keywords across all items in category
+  const freq = {};
+  for (const item of items) {
+    for (const kw of (item.keywords || [])) {
+      freq[kw] = (freq[kw] || 0) + 1;
+    }
+  }
+  const topics = Object.entries(freq).sort((a,b) => b[1]-a[1]).map(([kw]) => kw);
+  if (!topics.length) { block.classList.add('hidden'); return; }
+
+  activeTopicFilter = null;
+  block.classList.remove('hidden');
+  storiesEl.classList.add('hidden');
+
+  chipsEl.innerHTML = topics.map(t =>
+    `<button class="topic-chip" data-topic="${esc(t)}">${esc(t)}</button>`
+  ).join('');
+
+  chipsEl.querySelectorAll('.topic-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const topic = btn.dataset.topic;
+      if (activeTopicFilter === topic) {
+        activeTopicFilter = null;
+        chipsEl.querySelectorAll('.topic-chip').forEach(b => b.classList.remove('active'));
+        storiesEl.classList.add('hidden');
+        return;
+      }
+      activeTopicFilter = topic;
+      chipsEl.querySelectorAll('.topic-chip').forEach(b => b.classList.toggle('active', b.dataset.topic === topic));
+      const filtered = items.filter(i => (i.keywords || []).includes(topic));
+      storiesEl.innerHTML = filtered.map(item => `
+        <div class="topic-story-item">
+          ${item.image ? `<img class="topic-story-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
+          <div class="topic-story-text">
+            <div class="topic-story-headline">${esc(item.headline)}</div>
+            <div class="topic-story-source">${item.internetSource ? '🌐 ' : ''}${esc(item.source)}</div>
+          </div>
+        </div>`).join('');
+      storiesEl.classList.remove('hidden');
+    });
+  });
+
+  $('#topicsViewAll').onclick = () => {
+    activeTopicFilter = null;
+    chipsEl.querySelectorAll('.topic-chip').forEach(b => b.classList.remove('active'));
+    storiesEl.classList.add('hidden');
+  };
 }
 
 function renderDeck() {
@@ -86,10 +186,11 @@ function renderDeck() {
   // Build stack: show current + up to 2 behind
   const stackHtml = deckItems.slice(deckIndex, deckIndex + 3).map((item, offset) => {
     const isActive = offset === 0;
-    const url      = sourceMap[item.source];
+    const url      = item.internetSource ? item.sourceUrl : sourceMap[item.source];
+    const webTag   = item.internetSource ? `<span class="badge badge-web">🌐 Web</span> ` : '';
     const badge    = url
-      ? `<a class="badge badge-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(item.source)}</a>`
-      : `<span class="badge">${esc(item.source)}</span>`;
+      ? `${webTag}<a class="badge badge-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(item.source)}</a>`
+      : `${webTag}<span class="badge">${esc(item.source)}</span>`;
     return `
     <div class="deck-card ${isActive ? 'deck-active' : ''}" style="--offset:${offset}">
       <div class="deck-card-inner">
@@ -98,10 +199,13 @@ function renderDeck() {
         ${item.image ? `<img class="deck-image" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
         <div class="deck-headline">${esc(item.headline)}</div>
         ${item.description ? `<div class="deck-desc">${esc(item.description)}</div>` : ''}
+        ${item.context ? `<div class="deck-context">${esc(item.context)}</div>` : ''}
         <div class="deck-footer">
           ${badge}
           <div class="deck-actions">
-            <button class="deck-btn deck-skip" title="Skip">→</button>
+            <button class="deck-btn deck-chat"     title="Ask about this story">💬</button>
+            <button class="deck-btn deck-notebook" title="Add to notebook">📓</button>
+            <button class="deck-btn deck-skip"     title="Skip">→</button>
           </div>
         </div>
       </div>
@@ -110,6 +214,27 @@ function renderDeck() {
 
   panel.innerHTML = `<div class="deck-stack">${stackHtml}</div>`;
 
+  // Size the stack to fit the active card's content (no fixed height, no whitespace)
+  const stack = panel.querySelector('.deck-stack');
+  const activeCard = panel.querySelector('.deck-active');
+  if (stack && activeCard) {
+    const setHeight = () => { stack.style.height = activeCard.offsetHeight + 'px'; };
+    requestAnimationFrame(setHeight);
+    // Re-measure after the image (and any other deferred content) loads
+    activeCard.querySelectorAll('img').forEach(img => {
+      if (!img.complete) img.addEventListener('load', setHeight, { once: true });
+      img.addEventListener('error', setHeight, { once: true });
+    });
+    // And track any later layout changes (font load, lazy content, etc.)
+    if ('ResizeObserver' in window) {
+      const ro = new ResizeObserver(setHeight);
+      ro.observe(activeCard);
+      // Disconnect when the panel changes so we don't leak
+      stack._cleanup?.();
+      stack._cleanup = () => ro.disconnect();
+    }
+  }
+
   // Swipe handling
   const card = panel.querySelector('.deck-active');
   if (card) {
@@ -117,7 +242,9 @@ function renderDeck() {
     startReadTimer();
   }
 
-  panel.querySelector('.deck-skip')?.addEventListener('click', () => advanceDeck(false));
+  panel.querySelector('.deck-active .deck-skip')?.addEventListener('click', () => advanceDeck(false));
+  panel.querySelector('.deck-active .deck-chat')?.addEventListener('click', () => openChatFromCard(deckItems[deckIndex]));
+  panel.querySelector('.deck-active .deck-notebook')?.addEventListener('click', () => openNotebookModal(deckItems[deckIndex]));
 }
 
 function startReadTimer() {
@@ -180,9 +307,149 @@ function esc(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-/* ── Inner tab switching ── */
-$$('.inner-tab').forEach(btn => {
-  btn.addEventListener('click', () => renderCategory(btn.dataset.cat));
+/* ── Topic deep-dive clusters ── */
+const clusterState = new Map(); // clusterId -> { items, index }
+let openClusterId  = null;
+
+function renderTopicClusters(clusters) {
+  const el = $('#topicClusters');
+  if (!clusters?.length) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  clusterState.clear();
+  openClusterId = null;
+
+  el.innerHTML = `<div class="tc-title">Deep Dives</div>` +
+    clusters.map((c, i) => {
+      clusterState.set(i, { items: c.stories || [], index: 0, summary: c.summary || '' });
+      const count = c.stories?.length ? `<span class="tc-count">${c.stories.length} angles</span>` : '';
+      return `
+        <div class="tc-row" id="tc-row-${i}">
+          <button class="tc-header" data-ci="${i}">
+            <span class="tc-name">${esc(c.topic)}</span>
+            ${count}
+            <span class="tc-chevron">›</span>
+          </button>
+          <div class="tc-deck-wrap" id="tc-wrap-${i}"></div>
+        </div>`;
+    }).join('');
+
+  el.querySelectorAll('.tc-header').forEach(btn => {
+    btn.addEventListener('click', () => toggleCluster(+btn.dataset.ci));
+  });
+}
+
+function toggleCluster(i) {
+  if (openClusterId === i) {
+    // Close
+    $(`#tc-wrap-${i}`).innerHTML = '';
+    $(`#tc-row-${i} .tc-header`).classList.remove('tc-open');
+    openClusterId = null;
+    return;
+  }
+  // Close previously open
+  if (openClusterId !== null) {
+    $(`#tc-wrap-${openClusterId}`).innerHTML = '';
+    $(`#tc-row-${openClusterId} .tc-header`)?.classList.remove('tc-open');
+  }
+  openClusterId = i;
+  $(`#tc-row-${i} .tc-header`).classList.add('tc-open');
+  renderMiniDeck(i);
+}
+
+function renderMiniDeck(clusterId) {
+  const state = clusterState.get(clusterId);
+  const wrap  = $(`#tc-wrap-${clusterId}`);
+  if (!state || !wrap) return;
+  const { items, index } = state;
+
+  if (!items.length) {
+    const st = clusterState.get(clusterId);
+    const summary = st?.summary || '';
+    wrap.innerHTML = summary
+      ? `<div class="tc-summary-fallback">${esc(summary)}</div>`
+      : '<p class="tc-empty">Angle search returned no results — try refreshing the digest.</p>';
+    return;
+  }
+  if (index >= items.length) {
+    wrap.innerHTML = '<p class="tc-empty">All caught up on this topic.</p>';
+    return;
+  }
+
+  const stack = items.slice(index, index + 3).map((item, offset) => {
+    const isActive = offset === 0;
+    const badge = item.sourceUrl
+      ? `<a class="badge badge-link" href="${esc(item.sourceUrl)}" target="_blank" rel="noopener">${esc(item.source)}</a>`
+      : `<span class="badge">${esc(item.source)}</span>`;
+    const webTag = item.internetSource ? `<span class="badge badge-web">🌐 Web</span>` : '';
+    return `
+      <div class="mini-card ${isActive ? 'mini-active' : ''}" style="--offset:${offset}">
+        <div class="mini-inner">
+          ${item.image ? `<img class="mini-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          <div class="mini-body">
+            <div class="mini-headline">${esc(item.headline)}</div>
+            ${item.description ? `<div class="mini-desc">${esc(item.description)}</div>` : ''}
+            <div class="mini-footer">
+              <div class="mini-badges">${webTag}${badge}</div>
+              <button class="deck-btn mini-skip" title="Next">→</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).reverse().join('');
+
+  wrap.innerHTML = `<div class="mini-stack" id="ms-${clusterId}">${stack}</div>`;
+
+  // Auto-size stack height to active card (re-measure after image loads)
+  const stackEl  = wrap.querySelector('.mini-stack');
+  const activeEl = wrap.querySelector('.mini-active');
+  if (stackEl && activeEl) {
+    const setH = () => { stackEl.style.height = activeEl.offsetHeight + 'px'; };
+    requestAnimationFrame(setH);
+    activeEl.querySelectorAll('img').forEach(img => {
+      if (!img.complete) img.addEventListener('load', setH, { once: true });
+      img.addEventListener('error', setH, { once: true });
+    });
+  }
+
+  // Swipe + skip
+  const card = wrap.querySelector('.mini-active');
+  if (card) {
+    let startX = 0;
+    card.addEventListener('touchstart', e => { startX = e.touches[0].clientX; }, { passive: true });
+    card.addEventListener('touchend',   e => { if (Math.abs(e.changedTouches[0].clientX - startX) > 60) advanceMiniDeck(clusterId, true); }, { passive: true });
+    card.addEventListener('mousedown',  e => { startX = e.clientX; });
+    card.addEventListener('mouseup',    e => { if (Math.abs(e.clientX - startX) > 60) advanceMiniDeck(clusterId, true); });
+  }
+  wrap.querySelector('.mini-active .mini-skip')?.addEventListener('click', () => advanceMiniDeck(clusterId, false));
+}
+
+function advanceMiniDeck(clusterId, markRead) {
+  const state = clusterState.get(clusterId);
+  if (!state) return;
+  const item = state.items[state.index];
+
+  if (markRead && item) {
+    fetch('/api/mark-read', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ headline: item.headline, cluster_keywords: item.keywords || [], category: 'topic_cluster', source: item.source }),
+    }).catch(() => {});
+  }
+
+  const card = $(`#tc-wrap-${clusterId} .mini-active`);
+  if (card) {
+    card.classList.add(markRead ? 'deck-exit-read' : 'deck-exit-skip');
+    setTimeout(() => { state.index++; renderMiniDeck(clusterId); }, 220);
+  } else {
+    state.index++;
+    renderMiniDeck(clusterId);
+  }
+}
+
+/* ── Inner tab switching — use event delegation so listener survives DOM swaps ── */
+$('#tab-digest').addEventListener('click', e => {
+  const btn = e.target.closest('.inner-tab');
+  if (btn) renderCategory(btn.dataset.cat);
 });
 
 /* ── Refresh button (reload cache from server) ── */
@@ -190,18 +457,36 @@ $('#refreshBtn').addEventListener('click', () => {
   const btn = $('#refreshBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Generating…';
-  showStatus('Connecting…', 'info');
+
+  // Overlay breathing animation over digest area without destroying inner DOM
+  const digestArea = $('#digestArea');
+  digestArea.classList.add('hidden'); // hide content but keep DOM intact
+  const breathOverlay = document.createElement('div');
+  breathOverlay.id = 'breathStatus';
+  breathOverlay.className = 'breath-status-wrap';
+  digestArea.parentNode.insertBefore(breathOverlay, digestArea);
+  showBreathing(breathOverlay);
+
+  function restoreDigest() {
+    stopBreathing();
+    breathOverlay.remove();
+    digestArea.classList.remove('hidden');
+  }
 
   const es = new EventSource('/api/cron/digest');
 
   es.addEventListener('status', e => {
     const { message } = JSON.parse(e.data);
-    showStatus(message, 'info');
+    setBreathLabel(message);
   });
 
   es.addEventListener('done', e => {
+    restoreDigest();
     const digest = JSON.parse(e.data);
+    enrichDigestWithClusters(digest);
     renderDigest(digest);
+    loadChartsOfDay();
+    loadDateRolodex();
     showStatus('Digest updated!', 'success');
     setTimeout(hideStatus, 3000);
     btn.disabled = false;
@@ -209,10 +494,13 @@ $('#refreshBtn').addEventListener('click', () => {
     es.close();
   });
 
+  let gotServerError = false;
   es.addEventListener('error', e => {
+    gotServerError = true;
+    restoreDigest();
     try {
       const { error } = JSON.parse(e.data);
-      showStatus(`Error: ${error}`, 'error');
+      showStatus(error || 'Something went wrong', 'error');
     } catch {
       showStatus('Something went wrong', 'error');
     }
@@ -222,37 +510,93 @@ $('#refreshBtn').addEventListener('click', () => {
   });
 
   es.onerror = () => {
+    if (gotServerError) return;
+    restoreDigest();
     es.close();
     btn.disabled = false;
     btn.textContent = '↻ Refresh';
   };
 });
 
-/* ── Model picker (Settings tab) ── */
+/* ── Model pickers (Settings tab) ── */
+const MODEL_PICKERS = [
+  'clusterModelPicker',
+  'digestModelPicker',
+  'editorModelPicker',
+  'chatModelPicker',
+];
+
 async function loadModel() {
-  const s = await fetch('/api/settings').then(r => r.json()).catch(() => ({ model: 'qwen-turbo' }));
-  const picker = $('#modelPicker');
-  if (picker) picker.value = s.model;
+  const s = await fetch('/api/settings').then(r => r.json()).catch(() => ({}));
+  window._settingsSections = s.sections || []; // expose for renderInnerTabs labels
+  const keyHint = $('#anthropicKeyHint');
+  if (keyHint) {
+    keyHint.textContent = s.anthropicApiKeyConfigured
+      ? 'Key configured. Paste a new key and click Save to replace it, or leave blank and Save to clear.'
+      : 'Required to use Claude Sonnet/Opus/Haiku models below. Stored locally only.';
+  }
+  for (const id of MODEL_PICKERS) {
+    const picker = $(`#${id}`);
+    if (!picker) continue;
+    const key = picker.dataset.key;
+    if (s[key]) picker.value = s[key];
+  }
+  const toggle = $('#internetFallbackToggle');
+  if (toggle) toggle.checked = s.internetFallback !== false;
 }
 
-const modelPicker = $('#modelPicker');
-if (modelPicker) {
-  modelPicker.addEventListener('change', async () => {
-    const model = modelPicker.value;
+function showSaveStatus(text) {
+  const el = $('#modelSaveStatus');
+  if (!el) return;
+  el.textContent = text;
+  setTimeout(() => { el.textContent = ''; }, 2500);
+}
+
+for (const id of MODEL_PICKERS) {
+  const picker = $(`#${id}`);
+  if (!picker) continue;
+  picker.addEventListener('change', async () => {
+    const key   = picker.dataset.key;
+    const label = picker.options[picker.selectedIndex].text.split(' —')[0];
     await fetch('/api/settings', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
+      body:    JSON.stringify({ [key]: picker.value }),
     });
-    const status = $('#modelSaveStatus');
-    if (status) { status.textContent = `Saved — next digest will use ${modelPicker.options[modelPicker.selectedIndex].text}`; setTimeout(() => { status.textContent = ''; }, 3000); }
+    showSaveStatus(`Saved — ${label}`);
   });
 }
+
+$('#internetFallbackToggle')?.addEventListener('change', async e => {
+  await fetch('/api/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ internetFallback: e.target.checked }),
+  });
+  showSaveStatus(e.target.checked ? 'Internet fallback on' : 'Internet fallback off');
+});
+
+/* ── Anthropic API key save ── */
+$('#saveAnthropicKey')?.addEventListener('click', async () => {
+  const input = $('#anthropicApiKey');
+  if (!input) return;
+  const value = input.value.trim();
+  await fetch('/api/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ anthropicApiKey: value }),
+  });
+  input.value = '';
+  const hint = $('#anthropicKeyHint');
+  if (hint) hint.textContent = value ? 'Key saved. You can now select Claude Sonnet/Opus/Haiku in the dropdowns.' : 'Key cleared.';
+  showSaveStatus(value ? 'Anthropic API key saved' : 'Anthropic API key cleared');
+});
 
 /* ── Load last run on startup ── */
 async function loadLastRun() {
   const data = await fetch('/last-run').then(r => r.json()).catch(() => null);
   if (data) {
+    enrichDigestWithClusters(data);
     renderDigest(data);
   } else {
     $('#howToRun').classList.remove('hidden');
@@ -352,6 +696,30 @@ function appendMsg(role, text) {
   $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
 }
 
+// Card context injected silently into chat history — not shown in the input box
+let pendingCardContext = null;
+
+function openChatFromCard(item) {
+  // Switch to chat tab
+  $$('.tab').forEach(t => t.classList.remove('active'));
+  $$('.tab-content').forEach(s => { s.classList.add('hidden'); s.classList.remove('active'); });
+  const chatTab = document.querySelector('.tab[data-tab="chat"]');
+  if (chatTab) chatTab.classList.add('active');
+  const chatSection = $('#tab-chat');
+  if (chatSection) { chatSection.classList.remove('hidden'); chatSection.classList.add('active'); }
+
+  // Store story context to inject silently when user sends their message
+  const parts = [`Context: I'm reading about "${item.headline}"`];
+  if (item.source)      parts.push(`(${item.source})`);
+  if (item.description) parts.push(`— ${item.description}`);
+  if (item.context)     parts.push(`Background: ${item.context}`);
+  pendingCardContext = parts.join(' ');
+
+  const input = $('#chatInput');
+  input.value = '';
+  input.focus();
+}
+
 $('#chatSend').addEventListener('click', sendChat);
 $('#chatInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
@@ -363,7 +731,11 @@ async function sendChat() {
   if (!text) return;
   input.value = '';
   appendMsg('user', text);
-  chatHistory.push({ role: 'user', content: text });
+
+  // Prepend card context silently (not shown in UI) if coming from a card
+  const content = pendingCardContext ? `${pendingCardContext}\n\nUser question: ${text}` : text;
+  pendingCardContext = null;
+  chatHistory.push({ role: 'user', content });
 
   const btn = $('#chatSend');
   btn.disabled = true;
@@ -437,10 +809,912 @@ async function loadReadMap() {
 
 $('[data-tab="readmap"]').addEventListener('click', loadReadMap);
 
+/* ── Clusters — used to enrich digest items with keywords + images ── */
+let clusterData  = [];
+let cachedImages = [];
+
+async function loadClusters() {
+  const [clusterRes, imageRes] = await Promise.all([
+    fetch('/api/clusters').then(r => r.json()).catch(() => null),
+    fetch('/api/images').then(r => r.json()).catch(() => null),
+  ]);
+  clusterData  = clusterRes?.clusters || [];
+  cachedImages = imageRes?.urls || [];
+}
+
+function enrichDigestWithClusters(data) {
+  if (!clusterData.length || !data) return;
+  // Build maps keyed by headline for precise matching
+  const headlineMap = {};
+  for (const c of clusterData) {
+    const key = (c.headline || '').toLowerCase().trim();
+    if (key) headlineMap[key] = { image: c.image, keywords: c.keywords };
+  }
+
+  const CATS = ['top_today','tech','us_business','india_business','global_economies','politics','everything_else'];
+  for (const cat of CATS) {
+    for (const item of (data[cat] || [])) {
+      const key = (item.headline || '').toLowerCase().trim();
+      const match = headlineMap[key];
+      if (match) {
+        if (!item.image    && match.image)    item.image    = match.image;
+        if (!item.keywords && match.keywords) item.keywords = match.keywords;
+      }
+    }
+  }
+}
+
+/* ── Date rolodex ── */
+function localDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function loadDateRolodex() {
+  const el = $('#dateRolodex');
+  if (!el) return;
+  const history = await fetch(`/api/digest-history?today=${localDateKey(new Date())}`).then(r => r.json()).catch(() => ({}));
+
+  const todayKey = localDateKey(new Date());
+
+  // Build last 14 days
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key       = localDateKey(d);
+    const label     = i === 0 ? 'Today' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const hasDigest = !!history[key];
+    const isToday   = i === 0;
+    days.push({ key, label, hasDigest, isToday });
+  }
+
+  el.innerHTML = days.map(d => `
+    <button class="dr-pill ${d.isToday ? 'dr-today dr-active' : ''} ${d.hasDigest ? 'dr-has' : 'dr-empty'}"
+      data-date="${d.key}">
+      ${d.label}
+    </button>`).join('');
+
+  // Scroll today into view
+  requestAnimationFrame(() => {
+    el.querySelector('.dr-today')?.scrollIntoView({ inline: 'end', block: 'nearest' });
+  });
+
+  el.querySelectorAll('.dr-pill').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      el.querySelectorAll('.dr-pill').forEach(b => b.classList.remove('dr-active'));
+      btn.classList.add('dr-active');
+      const date = btn.dataset.date;
+      if (date === todayKey) {
+        await loadLastRun();
+      } else {
+        const data = await fetch(`/api/digest/${date}`).then(r => r.json()).catch(() => null);
+        if (data && (data.top_today?.length || data.tech?.length)) {
+          enrichDigestWithClusters(data);
+          renderDigest(data);
+        } else {
+          // No digest for this date — show empty state in digest area
+          digestData = null;
+          const digestArea = $('#digestArea');
+          if (digestArea) {
+            digestArea.querySelector('#deckWrap').innerHTML = '';
+            digestArea.querySelector('#topicsBlock')?.classList.add('hidden');
+            digestArea.querySelector('#topicClusters')?.classList.add('hidden');
+            digestArea.querySelector('#chartsOfDay')?.classList.add('hidden');
+            const empty = digestArea.querySelector('#emptyState') || (() => {
+              const d = document.createElement('div');
+              d.id = 'emptyState';
+              digestArea.appendChild(d);
+              return d;
+            })();
+            empty.innerHTML = `<div class="dr-no-digest">No digest stored for ${btn.textContent.trim()}.<br><span>Hit Refresh to generate one.</span></div>`;
+            empty.classList.remove('hidden');
+          }
+        }
+      }
+    });
+  });
+}
+
+/* ── Breathing load animation ── */
+const BREATH_MESSAGES = [
+  'Sit back, this takes a minute ☕',
+  'Good things take time…',
+  'Scanning the world for you 🌍',
+  'Relax — your digest is brewing',
+  'Clustering the noise into signal…',
+  'Almost there, hang tight ✨',
+  'Reading so you don\'t have to 📰',
+  'Finding what actually matters…',
+];
+let _breathMsgTimer = null;
+
+function showBreathing(statusEl) {
+  statusEl.innerHTML = `
+    <div class="breath-wrap">
+      <div class="breath-anim">
+        <div class="breath-blob"></div>
+        <div class="breath-blob b2"></div>
+        <div class="breath-blob b3"></div>
+      </div>
+      <div class="breath-step" id="breathLabel">Starting…</div>
+      <div class="breath-msg" id="breathMsg">${BREATH_MESSAGES[0]}</div>
+    </div>`;
+
+  // Rotate flavour messages every 8s (one full breath cycle)
+  let mi = 0;
+  _breathMsgTimer = setInterval(() => {
+    mi = (mi + 1) % BREATH_MESSAGES.length;
+    const el = $('#breathMsg');
+    if (el) { el.style.opacity = 0; setTimeout(() => { el.textContent = BREATH_MESSAGES[mi]; el.style.opacity = 1; }, 300); }
+  }, 8000);
+}
+
+function setBreathLabel(text) {
+  const el = $('#breathLabel');
+  if (el) el.textContent = text;
+}
+
+function stopBreathing() {
+  if (_breathMsgTimer) { clearInterval(_breathMsgTimer); _breathMsgTimer = null; }
+}
+
+/* ── Notebook ── */
+let notebookNotes    = [];
+let nbPendingItem    = null;
+
+async function loadNotebook() {
+  notebookNotes = await fetch('/api/notes').then(r => r.json()).catch(() => []);
+  renderNoteList();
+}
+
+function renderNoteList() {
+  const el = $('#noteList');
+  if (!el) return;
+  if (!notebookNotes.length) {
+    el.innerHTML = '<p class="meta" style="padding:24px 0">No notes yet. Add stories from the digest using the 📓 button on any card.</p>';
+    return;
+  }
+  el.innerHTML = notebookNotes.map(note => `
+    <div class="note-card" id="note-${note.id}">
+      <div class="note-card-header">
+        <span class="note-title" id="ntitle-${note.id}" contenteditable="true" data-id="${note.id}" spellcheck="false">${esc(note.title)}</span>
+        <div class="note-header-actions">
+          <button class="note-summarise-btn" data-id="${note.id}" title="Regenerate summary">✨ Summary</button>
+          <button class="note-delete-btn" data-id="${note.id}" title="Delete note">✕</button>
+        </div>
+      </div>
+      ${note.summary ? `<div class="note-summary">${esc(note.summary)}</div>` : ''}
+      <div class="note-entries">
+        ${note.entries.length ? note.entries.map(e => `
+          <div class="note-entry" id="nentry-${e.id}">
+            <div class="note-entry-headline">${esc(e.headline)}</div>
+            <div class="note-entry-desc" contenteditable="true" data-nid="${note.id}" data-eid="${e.id}" spellcheck="false">${esc(e.description || '')}</div>
+            <div class="note-entry-meta">${esc(e.source || '')} · ${new Date(e.addedAt).toLocaleDateString('en-US', {month:'short', day:'numeric'})}</div>
+            <button class="note-entry-del" data-nid="${note.id}" data-eid="${e.id}" title="Remove">✕</button>
+          </div>`).join('') : '<p class="note-empty">No entries yet.</p>'}
+      </div>
+      <div class="note-similar" data-note-id="${note.id}"></div>
+    </div>`).join('');
+
+  el.querySelectorAll('.note-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this note?')) return;
+      await fetch(`/api/notes/${btn.dataset.id}`, { method: 'DELETE' });
+      notebookNotes = notebookNotes.filter(n => n.id != btn.dataset.id);
+      renderNoteList();
+    });
+  });
+
+  el.querySelectorAll('.note-entry-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/notes/${btn.dataset.nid}/entries/${btn.dataset.eid}`, { method: 'DELETE' });
+      const note = notebookNotes.find(n => n.id == btn.dataset.nid);
+      if (note) note.entries = note.entries.filter(e => e.id != btn.dataset.eid);
+      renderNoteList();
+    });
+  });
+
+  // Editable note titles — save on blur
+  el.querySelectorAll('.note-title[contenteditable]').forEach(span => {
+    span.addEventListener('blur', async () => {
+      const newTitle = span.textContent.trim();
+      if (!newTitle) return;
+      const note = notebookNotes.find(n => n.id == span.dataset.id);
+      if (note && note.title !== newTitle) {
+        note.title = newTitle;
+        await fetch(`/api/notes/${span.dataset.id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      }
+    });
+    span.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); span.blur(); } });
+  });
+
+  // Editable entry descriptions — save on blur
+  el.querySelectorAll('.note-entry-desc[contenteditable]').forEach(div => {
+    div.addEventListener('blur', async () => {
+      const text = div.textContent.trim();
+      await fetch(`/api/notes/${div.dataset.nid}/entries/${div.dataset.eid}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: text }),
+      });
+      const note = notebookNotes.find(n => n.id == div.dataset.nid);
+      if (note) { const e = note.entries.find(e => e.id == div.dataset.eid); if (e) e.description = text; }
+    });
+  });
+
+  // Load similar stories for each note
+  el.querySelectorAll('.note-card').forEach(card => {
+    const noteId = +card.id.replace('note-', '');
+    const note   = notebookNotes.find(n => n.id === noteId);
+    if (note) loadNoteSimilar(note, card.querySelector('.note-similar'));
+  });
+
+  el.querySelectorAll('.note-summarise-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '…';
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/api/notes/${btn.dataset.id}/summary`, { method: 'POST' });
+        const d = await r.json();
+        if (d.summary) {
+          const note = notebookNotes.find(n => n.id == btn.dataset.id);
+          if (note) note.summary = d.summary;
+          renderNoteList();
+        }
+      } finally { btn.textContent = '✨ Summary'; btn.disabled = false; }
+    });
+  });
+}
+
+// Per-note similar story state (survives re-renders via sessionStorage key)
+const noteSeenHeadlines = {};
+
+async function loadNoteSimilar(note, containerEl) {
+  if (!containerEl) return;
+  const key   = `nseen_${note.id}`;
+  const seen  = JSON.parse(sessionStorage.getItem(key) || '[]');
+  noteSeenHeadlines[note.id] = new Set(seen);
+
+  const res = await fetch(`/api/notes/${note.id}/similar`).catch(() => null);
+  if (!res?.ok) { containerEl.innerHTML = ''; return; }
+  const { stories } = await res.json();
+  if (!stories?.length) { containerEl.innerHTML = ''; return; }
+
+  // Filter already-seen
+  const fresh = stories.filter(s => !noteSeenHeadlines[note.id].has(s.headline?.toLowerCase()));
+  if (!fresh.length) { containerEl.innerHTML = ''; return; }
+
+  // Mini-deck state keyed by note id
+  const stateKey = `ns_${note.id}`;
+  if (!clusterState.has(stateKey)) clusterState.set(stateKey, { items: fresh, index: 0 });
+
+  containerEl.innerHTML = `<div class="note-similar-title">Related Reading</div><div class="note-sim-deck" id="nsd-${note.id}"></div>`;
+  renderNoteSimilarDeck(note.id);
+}
+
+function renderNoteSimilarDeck(noteId) {
+  const state = clusterState.get(`ns_${noteId}`);
+  const el    = $(`#nsd-${noteId}`);
+  if (!state || !el) return;
+  const { items, index } = state;
+  if (index >= items.length) { el.innerHTML = '<p class="note-empty">All caught up.</p>'; return; }
+
+  const stack = items.slice(index, index + 3).map((item, offset) => {
+    const isActive = offset === 0;
+    const badge = item.sourceUrl
+      ? `<a class="badge badge-link" href="${esc(item.sourceUrl)}" target="_blank" rel="noopener">${esc(item.source)}</a>`
+      : `<span class="badge">${esc(item.source)}</span>`;
+    return `
+      <div class="mini-card ${isActive ? 'mini-active' : ''}" style="--offset:${offset}">
+        <div class="mini-inner">
+          ${item.image ? `<img class="mini-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          <div class="mini-body">
+            <div class="mini-headline">${esc(item.headline)}</div>
+            ${item.description ? `<div class="mini-desc">${esc(item.description)}</div>` : ''}
+            <div class="mini-footer">
+              <div class="mini-badges"><span class="badge badge-web">🌐 Web</span>${badge}</div>
+              <button class="deck-btn ns-skip" title="Next">→</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).reverse().join('');
+
+  el.innerHTML = `<div class="mini-stack" style="margin-top:8px">${stack}</div>`;
+
+  const stackEl  = el.querySelector('.mini-stack');
+  const activeEl = el.querySelector('.mini-active');
+  if (stackEl && activeEl) {
+    const setH = () => { stackEl.style.height = activeEl.offsetHeight + 'px'; };
+    requestAnimationFrame(setH);
+    activeEl.querySelectorAll('img').forEach(img => {
+      if (!img.complete) img.addEventListener('load', setH, { once: true });
+      img.addEventListener('error', setH, { once: true });
+    });
+  }
+
+  const card = el.querySelector('.mini-active');
+  if (card) {
+    let sx = 0;
+    card.addEventListener('touchstart', e => { sx = e.touches[0].clientX; }, { passive: true });
+    card.addEventListener('touchend',   e => { if (Math.abs(e.changedTouches[0].clientX - sx) > 60) advanceNoteSimilar(noteId); }, { passive: true });
+    card.addEventListener('mousedown',  e => { sx = e.clientX; });
+    card.addEventListener('mouseup',    e => { if (Math.abs(e.clientX - sx) > 60) advanceNoteSimilar(noteId); });
+  }
+  el.querySelector('.mini-active .ns-skip')?.addEventListener('click', () => advanceNoteSimilar(noteId));
+}
+
+function advanceNoteSimilar(noteId) {
+  const state = clusterState.get(`ns_${noteId}`);
+  if (!state) return;
+  const item = state.items[state.index];
+  if (item) {
+    // Track as seen in sessionStorage
+    const key  = `nseen_${noteId}`;
+    const seen = JSON.parse(sessionStorage.getItem(key) || '[]');
+    seen.push(item.headline?.toLowerCase());
+    sessionStorage.setItem(key, JSON.stringify(seen));
+  }
+  const card = $(`#nsd-${noteId} .mini-active`);
+  if (card) {
+    card.classList.add('deck-exit-skip');
+    setTimeout(() => { state.index++; renderNoteSimilarDeck(noteId); }, 220);
+  } else {
+    state.index++;
+    renderNoteSimilarDeck(noteId);
+  }
+}
+
+$('#newNoteBtn')?.addEventListener('click', async () => {
+  const title = prompt('Note name:');
+  if (!title?.trim()) return;
+  const note = await fetch('/api/notes', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title.trim() }),
+  }).then(r => r.json());
+  notebookNotes.push(note);
+  renderNoteList();
+  // Switch to notebook tab
+  $$('.tab').forEach(t => t.classList.remove('active'));
+  $$('.tab-content').forEach(s => { s.classList.add('hidden'); s.classList.remove('active'); });
+  document.querySelector('.tab[data-tab="notebook"]').classList.add('active');
+  $('#tab-notebook').classList.remove('hidden'); $('#tab-notebook').classList.add('active');
+});
+
+function openNotebookModal(item) {
+  nbPendingItem = item;
+  const modal = $('#notebookModal');
+  $('#nbModalStory').textContent = item.headline.slice(0, 100);
+  const sel = $('#nbNoteSelect');
+  sel.innerHTML = notebookNotes.length
+    ? notebookNotes.map(n => `<option value="${n.id}">${esc(n.title)}</option>`).join('')
+    : '<option value="">— no notes yet —</option>';
+  $('#nbNewNoteInput').value = '';
+  modal.classList.remove('hidden');
+}
+
+$('#nbCancelBtn')?.addEventListener('click', () => { $('#notebookModal').classList.add('hidden'); nbPendingItem = null; });
+$('#notebookModal')?.addEventListener('click', e => { if (e.target === $('#notebookModal')) { $('#notebookModal').classList.add('hidden'); nbPendingItem = null; } });
+
+$('#nbSaveBtn')?.addEventListener('click', async () => {
+  if (!nbPendingItem) return;
+  const newTitle = $('#nbNewNoteInput').value.trim();
+  let noteId;
+
+  if (newTitle) {
+    const note = await fetch('/api/notes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle }),
+    }).then(r => r.json());
+    notebookNotes.push(note);
+    noteId = note.id;
+  } else {
+    noteId = $('#nbNoteSelect').value;
+    if (!noteId) return;
+  }
+
+  const entry = await fetch(`/api/notes/${noteId}/entries`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      headline:    nbPendingItem.headline,
+      description: nbPendingItem.description || '',
+      source:      nbPendingItem.source || '',
+      context:     nbPendingItem.context || '',
+    }),
+  }).then(r => r.json());
+
+  const note = notebookNotes.find(n => n.id == noteId);
+  if (note) { note.entries.push(entry); renderNoteList(); }
+
+  $('#notebookModal').classList.add('hidden');
+  nbPendingItem = null;
+
+  // Flash feedback
+  showSaveStatus('Added to notebook 📓');
+});
+
+/* ── Persona tab ── */
+const DEFAULT_SECTIONS = [
+  { id: 'tech',             label: 'Tech',             custom: false },
+  { id: 'us_business',      label: 'US Business',      custom: false },
+  { id: 'india_business',   label: 'India Business',   custom: false },
+  { id: 'global_economies', label: 'Global Economies', custom: false },
+  { id: 'politics',         label: 'Politics',         custom: false },
+  { id: 'everything_else',  label: 'Everything Else',  custom: false },
+];
+
+let personaAnswers  = {};
+let personaSections = [];
+
+async function loadPersona() {
+  const s = await fetch('/api/settings').then(r => r.json()).catch(() => ({}));
+  personaAnswers  = s.persona  || {};
+  personaSections = s.sections || DEFAULT_SECTIONS.map(s => ({ ...s }));
+  renderPersonaQuestions();
+  renderPersonaSections();
+}
+
+function renderPersonaQuestions() {
+  $$('#personaQuestions .pq-item').forEach(item => {
+    const key = item.dataset.key;
+    const val = personaAnswers[key];
+    item.querySelectorAll('.pq-btn').forEach(btn => {
+      btn.classList.toggle('pq-selected', btn.dataset.val === val);
+    });
+  });
+}
+
+function showPersonaSaved() {
+  const el = $('#personaSaveStatus');
+  if (!el) return;
+  el.textContent = '✓ Saved';
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+$('#personaSaveBtn')?.addEventListener('click', async () => {
+  await savePersona();
+  showPersonaSaved();
+});
+
+$$('#personaQuestions .pq-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const key = btn.closest('.pq-item').dataset.key;
+    personaAnswers[key] = btn.dataset.val;
+    renderPersonaQuestions();
+    await savePersona();
+    showPersonaSaved();
+  });
+});
+
+function renderPersonaSections() {
+  const list = $('#personaSectionList');
+  if (!list) return;
+  list.innerHTML = personaSections.map((s, i) => `
+    <li class="persona-section-item ${s.enabled === false ? 'ps-disabled' : ''}">
+      <span class="persona-section-name">${esc(s.label)}${!s.custom ? ' <span class="ps-default-tag">default</span>' : ''}</span>
+      <div class="persona-section-actions">
+        ${s.custom ? `<button class="ps-btn ps-edit" data-i="${i}" title="Rename">✏️</button>` : ''}
+        ${s.custom
+          ? `<button class="ps-btn ps-del" data-i="${i}" title="Remove">✕</button>`
+          : `<label class="toggle" title="${s.enabled === false ? 'Enable' : 'Disable'} section">
+               <input type="checkbox" class="ps-toggle" data-i="${i}" ${s.enabled !== false ? 'checked' : ''} />
+               <span class="slider"></span>
+             </label>`
+        }
+      </div>
+    </li>`).join('');
+
+  list.querySelectorAll('.ps-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      personaSections.splice(+btn.dataset.i, 1);
+      renderPersonaSections();
+      await savePersona();
+    });
+  });
+
+  list.querySelectorAll('.ps-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i    = +btn.dataset.i;
+      const name = prompt('Rename section:', personaSections[i].label);
+      if (name?.trim()) {
+        personaSections[i].label = name.trim();
+        renderPersonaSections();
+        savePersona();
+      }
+    });
+  });
+
+  list.querySelectorAll('.ps-toggle').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      personaSections[+cb.dataset.i].enabled = cb.checked;
+      renderPersonaSections();
+      await savePersona();
+      showPersonaSaved();
+    });
+  });
+}
+
+$('#addSectionBtn')?.addEventListener('click', async () => {
+  const input = $('#newSectionInput');
+  const label = input?.value.trim();
+  if (!label) return;
+  const id = 'custom_' + Date.now();
+  personaSections.push({ id, label, custom: true });
+  input.value = '';
+  renderPersonaSections();
+  await savePersona();
+});
+
+async function savePersona() {
+  await fetch('/api/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ persona: personaAnswers, sections: personaSections }),
+  });
+}
+
+/* ── Chart of the Day (Chart.js) ── */
+let _chartInstance = null;
+
+async function loadChartsOfDay() {
+  const el = $('#chartsOfDay');
+  if (!el) return;
+
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="charts-title">Chart of the Day</div>
+    <div class="cotd-card">
+      <div class="cotd-loading">
+        <div class="cotd-spinner"></div>
+        <span>Fetching latest data…</span>
+      </div>
+    </div>`;
+
+  try {
+    const data = await fetch('/api/chart-of-day').then(r => r.json());
+    if (data.error) throw new Error(data.error);
+    renderChartOfDay(el, data);
+  } catch (e) {
+    el.innerHTML = `<div class="charts-title">Chart of the Day</div><p class="cotd-error">Could not load chart: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderChartOfDay(el, data) {
+  if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
+
+  const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#D4745A';
+  const accentSoft  = getComputedStyle(document.documentElement).getPropertyValue('--peach-light').trim() || '#F5C5A3';
+
+  // Big-number callout: most recent value + delta vs. first point
+  const isBar    = data.chartType === 'bar';
+  const last     = data.data[data.data.length - 1];
+  const first    = data.data[0];
+  const delta    = (last - first);
+  const deltaPct = first ? (delta / Math.abs(first)) * 100 : 0;
+  const deltaSign = delta > 0 ? '↑' : delta < 0 ? '↓' : '→';
+  const deltaClass = delta > 0 ? 'cotd-delta-up' : delta < 0 ? 'cotd-delta-down' : 'cotd-delta-flat';
+  const unitStr  = data.unit ? (data.unit.length <= 3 ? data.unit : ' ' + data.unit) : '';
+  const formatVal = v => {
+    if (typeof v !== 'number') return v;
+    if (Math.abs(v) >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  };
+  const lastLabel = data.labels[data.labels.length - 1];
+  const firstLabel = data.labels[0];
+
+  el.innerHTML = `
+    <div class="charts-title">Chart of the Day</div>
+    <div class="cotd-card">
+      <div class="cotd-topic-badge">${esc(data.topic)}</div>
+      <div class="cotd-headline">${esc(data.headline)}</div>
+      <div class="cotd-stat-row">
+        <div class="cotd-bignum">
+          <span class="cotd-bignum-value">${formatVal(last)}${unitStr.length <= 3 ? unitStr : ''}</span>
+          <span class="cotd-bignum-label">as of ${esc(lastLabel)}</span>
+        </div>
+        <div class="cotd-delta ${deltaClass}">
+          <span class="cotd-delta-arrow">${deltaSign}</span>
+          <span class="cotd-delta-value">${formatVal(Math.abs(delta))}${unitStr.length <= 3 ? unitStr : ''}</span>
+          <span class="cotd-delta-pct">${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%</span>
+          <span class="cotd-delta-since">since ${esc(firstLabel)}</span>
+        </div>
+      </div>
+      <div class="cotd-canvas-wrap">
+        <canvas id="cotdCanvas"></canvas>
+      </div>
+      <div class="cotd-axis-note">${esc(data.chartTitle || data.unit || '')}</div>
+      <div class="cotd-insight">${esc(data.insight)}</div>
+      <div class="cotd-explanation">${esc(data.explanation)}</div>
+    </div>`;
+
+  const ctx = document.getElementById('cotdCanvas')?.getContext('2d');
+  if (!ctx) return;
+
+  // Build a vertical gradient for the area fill
+  const canvas = ctx.canvas;
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 220);
+  gradient.addColorStop(0, accentColor + '55');
+  gradient.addColorStop(1, accentColor + '08');
+
+  // Highlight the last point: bigger filled circle in accent color, all others smaller and softer
+  const lastIdx = data.data.length - 1;
+  const pointRadius = data.data.map((_, i) => i === lastIdx ? 6 : (i === 0 ? 4 : 3));
+  const pointBg     = data.data.map((_, i) => i === lastIdx ? accentColor : '#fff');
+  const pointBorder = data.data.map(() => accentColor);
+
+  _chartInstance = new Chart(ctx, {
+    type: isBar ? 'bar' : 'line',
+    data: {
+      labels:   data.labels,
+      datasets: [{
+        label:           data.chartTitle || data.topic,
+        data:            data.data,
+        borderColor:     accentColor,
+        backgroundColor: isBar ? data.data.map(() => accentSoft + 'cc') : gradient,
+        borderWidth:     2.5,
+        pointRadius:     isBar ? 0 : pointRadius,
+        pointBackgroundColor: pointBg,
+        pointBorderColor:     pointBorder,
+        pointBorderWidth:     2,
+        pointHoverRadius:     7,
+        tension:              0.35,
+        fill:                 !isBar,
+      }],
+    },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      layout: { padding: { top: 12, right: 12, bottom: 4, left: 4 } },
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#2a1a14',
+          titleFont:   { size: 11, weight: '600' },
+          bodyFont:    { size: 12, weight: '700' },
+          padding:     10,
+          cornerRadius: 6,
+          displayColors: false,
+          callbacks: {
+            label: ctx => `${formatVal(ctx.parsed.y)}${unitStr}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            font: { size: 11, weight: '500' },
+            color: '#8a6f60',
+            maxRotation: 0,
+            autoSkip: true,
+            autoSkipPadding: 18,
+          },
+          grid:   { display: false },
+          border: { color: '#E5D2C2' },
+        },
+        y: {
+          position: 'right',
+          ticks: {
+            font: { size: 10 },
+            color: '#a89483',
+            padding: 6,
+            maxTicksLimit: 5,
+            callback: v => `${formatVal(v)}${unitStr.length <= 3 ? unitStr : ''}`,
+          },
+          grid:   { color: '#EDD8C850', drawTicks: false },
+          border: { display: false },
+        },
+      },
+    },
+  });
+}
+
 /* ── Init ── */
 (async () => {
   await loadSources();
+  await loadClusters();
   await loadLastRun();
   await loadInboxStatus();
   await loadModel();
+  await loadPersona();
+  await loadNotebook();
+  await loadDateRolodex();
+  // loadChartsOfDay is called lazily by renderCategory when top_today is active
 })();
+
+/* ── Persona Trainer ── */
+
+const SECTION_LABELS = { top_today:'Top Today', tech:'Tech', us_business:'US Business', india_business:'India Business', global_economies:'Global Economies', politics:'Politics', everything_else:'Everything Else' };
+
+function renderTrainerInput(persona, data) {
+  if (persona === 'editor') {
+    // Show digest sections as readable headline lists
+    const sections = ['top_today','tech','us_business','india_business','global_economies','politics','everything_else'];
+    return sections.map(s => {
+      const items = data[s];
+      if (!items?.length) return '';
+      return `<div class="tr-section"><div class="tr-section-label">${SECTION_LABELS[s] || s}</div>${items.map(i => `<div class="tr-item">• ${esc(i.headline)}</div>`).join('')}</div>`;
+    }).filter(Boolean).join('');
+  }
+  if (persona === 'reporter') {
+    const clusters = data.clusters || [];
+    return clusters.map(c => `
+      <div class="tr-section">
+        <div class="tr-section-label">Cluster ${c.id} — ${esc(c.category || '')}</div>
+        <div class="tr-item"><strong>${esc(c.headline)}</strong></div>
+        ${(c.articles || []).map(a => `<div class="tr-item tr-dim">— ${esc(String(a).slice(0,120))}</div>`).join('')}
+      </div>`).join('');
+  }
+  if (persona === 'researcher') {
+    const articles = data.articles || [];
+    return articles.map(a => `<div class="tr-section"><div class="tr-section-label">${esc(a.source)}</div><div class="tr-item"><strong>${esc(a.title)}</strong></div><div class="tr-item tr-dim">${esc((a.snippet||'').slice(0,140))}</div></div>`).join('');
+  }
+  return esc(JSON.stringify(data, null, 2));
+}
+
+function renderTrainerOutput(persona, data) {
+  if (persona === 'editor') {
+    // Show what the editor removed/moved/reordered
+    if (!data) return '<div class="tr-dim">No changes suggested.</div>';
+    const removes = data.remove || {};
+    const moves   = data.move   || [];
+    const reorder = data.reorder || {};
+    let html = '';
+    for (const [sec, headlines] of Object.entries(removes)) {
+      if (!headlines?.length) continue;
+      html += `<div class="tr-section"><div class="tr-section-label tr-remove-label">Remove from ${SECTION_LABELS[sec] || sec}</div>${headlines.map(h => `<div class="tr-item tr-remove">✕ ${esc(h)}</div>`).join('')}</div>`;
+    }
+    for (const m of moves) {
+      html += `<div class="tr-section"><div class="tr-section-label tr-move-label">Move story</div><div class="tr-item">→ "${esc(m.headline)}" from <strong>${SECTION_LABELS[m.from]||m.from}</strong> to <strong>${SECTION_LABELS[m.to]||m.to}</strong></div></div>`;
+    }
+    for (const [sec, order] of Object.entries(reorder)) {
+      if (!order?.length) continue;
+      html += `<div class="tr-section"><div class="tr-section-label">Re-ranked: ${SECTION_LABELS[sec]||sec}</div>${order.slice(0,5).map((h,i) => `<div class="tr-item">${i+1}. ${esc(h)}</div>`).join('')}</div>`;
+    }
+    return html || '<div class="tr-dim">Editor found no issues.</div>';
+  }
+  if (persona === 'reporter') {
+    const entries = Array.isArray(data) ? data : [];
+    return entries.map(e => `<div class="tr-section"><div class="tr-item"><strong>${esc(e.headline||'')}</strong></div><div class="tr-item tr-dim">${esc(e.description||'')}</div><div class="tr-item tr-dim" style="font-size:.7rem;margin-top:4px">${esc(e.source||'')}</div></div>`).join('');
+  }
+  if (persona === 'researcher') {
+    const clusters = (data?.clusters || (Array.isArray(data) ? data : []));
+    return clusters.map(c => `<div class="tr-section"><div class="tr-section-label">${esc(c.category||'')} — ${esc(c.headline||'')}</div>${(c.articleIds||[]).map(id => `<div class="tr-item tr-dim">Article #${id}</div>`).join('')}<div class="tr-item" style="font-size:.7rem">${(c.keywords||[]).join(', ')}</div></div>`).join('');
+  }
+  return esc(JSON.stringify(data, null, 2));
+}
+
+const PERSONA_DESCS = {
+  editor:     'The Editor reviews the full digest after it\'s written. It removes cross-section duplicates, fixes misplaced stories, and re-ranks each section by importance. Think of it as your senior editor — coach it on what "important" means to you.',
+  reporter:   'The Reporter turns raw story clusters into polished headlines and descriptions. Train it on your preferred style: lead with numbers, be specific, avoid hype, prefer active voice.',
+  researcher: 'The Junior Editor scans headlines from Reuters, FT, WSJ, Guardian, and Bloomberg, then selects and groups the stories that matter. This is the first filter — coach it on which stories you want surfaced and which to skip.',
+};
+
+let trainerPersona      = 'editor';
+let trainerSyntheticIn  = null;
+let trainerPersonaOut   = null;
+
+function openTrainer() {
+  $('#trainerModal').classList.remove('hidden');
+  loadTrainerState();
+}
+function closeTrainer() { $('#trainerModal').classList.add('hidden'); }
+
+$('#openTrainerBtn')?.addEventListener('click', openTrainer);
+$('#trainerClose')?.addEventListener('click', closeTrainer);
+$('#trainerModal')?.addEventListener('click', e => { if (e.target === $('#trainerModal')) closeTrainer(); });
+
+$$('.trainer-persona-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.trainer-persona-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    trainerPersona = btn.dataset.persona;
+    trainerSyntheticIn = null;
+    trainerPersonaOut  = null;
+    $('#trainerScenario').classList.add('hidden');
+    $('#trainerStatus').classList.add('hidden');
+    loadTrainerState();
+  });
+});
+
+async function loadTrainerState() {
+  $('#trainerPersonaDesc').textContent = PERSONA_DESCS[trainerPersona] || '';
+  try {
+    const data = await fetch(`/api/train/${trainerPersona}`).then(r => r.json());
+    const rulesWrap = $('#trainerRulesWrap');
+    const rulesList = $('#trainerRulesList');
+    if (data.rules && data.rules.length) {
+      rulesList.innerHTML = data.rules.map(r => `<li>${esc(r)}</li>`).join('');
+      rulesWrap.classList.remove('hidden');
+    } else {
+      rulesWrap.classList.add('hidden');
+    }
+    const genBtn = $('#trainerGenBtn');
+    if (genBtn) genBtn.textContent = data.examples > 0
+      ? `Generate Scenario (${data.examples} saved so far)`
+      : 'Generate Scenario';
+  } catch {}
+}
+
+$('#trainerGenBtn')?.addEventListener('click', async () => {
+  const btn = $('#trainerGenBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  $('#trainerStatus').classList.add('hidden');
+  $('#trainerScenario').classList.add('hidden');
+
+  try {
+    const res = await fetch(`/api/train/${trainerPersona}/generate`, { method: 'POST' }).then(r => r.json());
+    if (res.error) throw new Error(res.error);
+
+    trainerSyntheticIn = res.syntheticInput;
+    trainerPersonaOut  = res.personaOutput;
+
+    $('#trainerInput').innerHTML  = renderTrainerInput(trainerPersona, res.syntheticInput);
+    $('#trainerOutput').innerHTML = renderTrainerOutput(trainerPersona, res.personaOutput);
+    $('#trainerFeedback').value   = '';
+    $('#trainerScenario').classList.remove('hidden');
+  } catch (e) {
+    showTrainerStatus(`Error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Regenerate Scenario';
+  }
+});
+
+$('#trainerApproveBtn')?.addEventListener('click', async () => {
+  if (!trainerSyntheticIn || !trainerPersonaOut) return;
+  const feedback = $('#trainerFeedback').value.trim();
+
+  const btn = $('#trainerApproveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  try {
+    const res = await fetch(`/api/train/${trainerPersona}/feedback`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        syntheticInput:  trainerSyntheticIn,
+        personaOutput:   trainerPersonaOut,
+        userFeedback:    feedback,
+        approvedOutput:  trainerPersonaOut,
+      }),
+    }).then(r => r.json());
+
+    const msg = res.rules?.length
+      ? `Saved! ${res.totalExamples} examples total. ${res.rules.length} rules distilled.`
+      : `Saved! ${res.totalExamples} examples total.`;
+    showTrainerStatus(msg, 'success');
+    trainerSyntheticIn = null;
+    trainerPersonaOut  = null;
+    $('#trainerScenario').classList.add('hidden');
+    loadTrainerState();
+  } catch (e) {
+    showTrainerStatus(`Error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✓ Approve & Save';
+  }
+});
+
+$('#trainerRejectBtn')?.addEventListener('click', () => {
+  trainerSyntheticIn = null;
+  trainerPersonaOut  = null;
+  $('#trainerScenario').classList.add('hidden');
+  showTrainerStatus('Rejected. Generate a new scenario to try again.', 'error');
+});
+
+function showTrainerStatus(msg, type = 'success') {
+  const el = $('#trainerStatus');
+  el.textContent = msg;
+  el.className = `trainer-status ${type}`;
+  el.classList.remove('hidden');
+}

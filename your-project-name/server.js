@@ -2,13 +2,17 @@ require('dotenv').config({ override: true, path: require('path').join(__dirname,
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
-
-const Anthropic = require('@anthropic-ai/sdk');
 const storage   = require('./lib/storage');
 const gmail     = require('./lib/gmail');
 const clusterer = require('./lib/clusterer');
 const digestGen = require('./lib/digest-generator');
-const supa      = require('./lib/supabase');
+const exaImages    = require('./lib/exa-images');
+const storyEnricher     = require('./lib/story-enricher');
+const internetFallback  = require('./lib/internet-fallback');
+const topicClusters     = require('./lib/topic-clusters');
+const charts            = require('./lib/charts');
+const editor            = require('./lib/editor');
+const supa          = require('./lib/supabase');
 
 const app  = express();
 app.use(cors());
@@ -16,6 +20,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
+
+let digestRunning = false;
 
 // ─── Sources ───────────────────────────────────────────────────────────────────
 
@@ -52,20 +58,125 @@ app.delete('/sources/:id', async (req, res) => {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
-app.get('/api/settings', async (req, res) => res.json(await storage.getSettings()));
+app.get('/api/settings', async (req, res) => {
+  const s = await storage.getSettings();
+  // Don't echo the raw API key back to the client; just signal whether it's set
+  if (s && s.anthropicApiKey) {
+    s.anthropicApiKeyConfigured = true;
+    s.anthropicApiKey = ''; // mask
+  } else {
+    s.anthropicApiKeyConfigured = false;
+  }
+  res.json(s);
+});
 
 app.post('/api/settings', async (req, res) => {
-  const { model } = req.body;
-  const valid = [...digestGen.QWEN_MODELS, ...digestGen.ANTHROPIC_MODELS];
-  if (!valid.includes(model)) return res.status(400).json({ error: 'Invalid model' });
-  await storage.setSettings({ model });
-  res.json({ success: true, model });
+  const validModels = digestGen.ALL_MODELS;
+  const modelKeys   = ['clusterModel', 'digestModel', 'chatModel', 'editorModel'];
+  const update = {};
+  for (const key of modelKeys) {
+    if (req.body[key] === undefined) continue;
+    if (!validModels.includes(req.body[key])) return res.status(400).json({ error: `Invalid model for ${key}` });
+    update[key] = req.body[key];
+  }
+  if (req.body.internetFallback !== undefined) update.internetFallback = !!req.body.internetFallback;
+  if (req.body.persona   !== undefined) update.persona   = req.body.persona;
+  if (req.body.sections  !== undefined) update.sections  = req.body.sections;
+  if (req.body.anthropicApiKey !== undefined) {
+    const k = String(req.body.anthropicApiKey || '').trim();
+    update.anthropicApiKey = k; // stored as-is; can be empty to clear
+  }
+  const current = await storage.getSettings();
+  await storage.setSettings({ ...current, ...update });
+  res.json({ success: true });
 });
 
 // ─── Digest cache ──────────────────────────────────────────────────────────────
 
 app.get('/last-run',      async (req, res) => res.json(await storage.getLastRun()));
 app.get('/api/clusters',  async (req, res) => res.json(await storage.getClusters()));
+app.get('/api/digest-history', async (req, res) => {
+  const h       = await storage.getDigestHistory();
+  const lastRun = await storage.getLastRun();
+
+  // Backfill using client's local today key (avoids UTC vs local timezone mismatch)
+  const clientToday = req.query.today; // e.g. "2026-04-27"
+  if (lastRun?.ranAt) {
+    // Store under both the client's local date AND the server UTC date
+    const keys = [lastRun.ranAt.slice(0, 10)];
+    if (clientToday && !keys.includes(clientToday)) keys.push(clientToday);
+    for (const k of keys) {
+      if (!h[k]) { h[k] = lastRun; await storage.setDigestHistory(h); }
+    }
+  }
+
+  const index = Object.fromEntries(Object.entries(h).map(([date, d]) => [date, { date: d.date, ranAt: d.ranAt }]));
+  res.json(index);
+});
+
+app.get('/api/digest/:date', async (req, res) => {
+  const h = await storage.getDigestHistory();
+  let d = h[req.params.date];
+  // Fallback: if requesting today and it's in lastRun but not history yet
+  if (!d) {
+    const lastRun = await storage.getLastRun();
+    if (lastRun?.ranAt?.startsWith(req.params.date)) d = lastRun;
+  }
+  if (!d) return res.status(404).json({ error: 'No digest for this date' });
+  res.json(d);
+});
+
+app.get('/api/charts',    async (req, res) => {
+  const last = await storage.getLastRun();
+  res.json({ charts: last?.charts || [] });
+});
+
+// ─── Chart of the Day (Exa + LLM → Chart.js data) ────────────────────────────
+const chartOfDay = require('./lib/chart-of-day');
+
+let chartInFlight = null;
+
+app.get('/api/chart-of-day', async (req, res) => {
+  try {
+    const now = new Date();
+    const y = now.getFullYear(), m = String(now.getMonth()+1).padStart(2,'0'), d = String(now.getDate()).padStart(2,'0');
+    const dateKey = `${y}-${m}-${d}`;
+
+    // Return cached chart for today if available
+    const lastRun = await storage.getLastRun();
+    if (lastRun?.chartOfDay?.[dateKey]) {
+      return res.json(lastRun.chartOfDay[dateKey]);
+    }
+
+    // In-flight deduplication: concurrent callers share one subprocess
+    if (chartInFlight) {
+      const chart = await chartInFlight;
+      return res.json(chart);
+    }
+
+    const settings = await storage.getSettings();
+    const model    = settings.digestModel || 'llama-3.3-70b-versatile';
+    chartInFlight  = chartOfDay.fetchChartOfDay(model)
+      .finally(() => { chartInFlight = null; });
+    const chart    = await chartInFlight;
+
+    // Cache today's chart
+    const updated = lastRun ? { ...lastRun } : {};
+    if (!updated.chartOfDay) updated.chartOfDay = {};
+    updated.chartOfDay[dateKey] = chart;
+    await storage.setLastRun(updated);
+
+    res.json(chart);
+  } catch (e) {
+    console.error('[chart-of-day]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+app.get('/api/images',    async (req, res) => {
+  const cache = await storage.getEmailCache();
+  const urls  = Object.values(cache).flatMap(e => e.imageUrls || []).filter(Boolean);
+  res.json({ urls: [...new Set(urls)] });
+});
 
 app.post('/api/mark-read', async (req, res) => {
   const { headline, cluster_keywords, category, source } = req.body;
@@ -91,8 +202,144 @@ app.get('/api/read-history', async (req, res) => {
 app.post('/api/push-digest', async (req, res) => {
   const { digest } = req.body;
   if (!digest) return res.status(400).json({ error: 'digest required' });
-  await storage.setLastRun({ ...digest, ranAt: new Date().toISOString() });
-  console.log(`[push-digest] Stored digest for ${digest.date}`);
+  const now2 = new Date();
+  const todayLabel2 = now2.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const stored = { ...digest, date: todayLabel2, ranAt: now2.toISOString() };
+  await storage.setLastRun(stored);
+  // Also archive to history
+  const dateKey2 = now2.toISOString().slice(0, 10);
+  const hist2 = await storage.getDigestHistory();
+  hist2[dateKey2] = stored;
+  await storage.setDigestHistory(hist2);
+  console.log(`[push-digest] Stored digest for ${todayLabel2}`);
+  res.json({ success: true });
+});
+
+// ─── Notebook ──────────────────────────────────────────────────────────────────
+
+app.get('/api/notes', async (req, res) => res.json(await storage.getNotes()));
+
+app.post('/api/notes', async (req, res) => {
+  const { title } = req.body;
+  if (!title?.trim()) return res.status(400).json({ error: 'title required' });
+  const notes = await storage.getNotes();
+  const note  = { id: Date.now(), title: title.trim(), summary: '', entries: [], createdAt: new Date().toISOString() };
+  notes.push(note);
+  await storage.setNotes(notes);
+  res.json(note);
+});
+
+app.post('/api/notes/:id/entries', async (req, res) => {
+  const notes = await storage.getNotes();
+  const note  = notes.find(n => n.id == req.params.id);
+  if (!note) return res.status(404).json({ error: 'Note not found' });
+  const entry = { id: Date.now(), addedAt: new Date().toISOString(), ...req.body };
+  note.entries.push(entry);
+  note.summary = ''; // invalidate so it gets regenerated
+  await storage.setNotes(notes);
+  res.json(entry);
+});
+
+app.post('/api/notes/:id/summary', async (req, res) => {
+  const notes = await storage.getNotes();
+  const note  = notes.find(n => n.id == req.params.id);
+  if (!note || !note.entries.length) return res.status(400).json({ error: 'No entries' });
+  const { chatModel } = await storage.getSettings();
+  const entriesText = note.entries.map((e, i) =>
+    `${i+1}. ${e.headline} — ${e.description || ''}`
+  ).join('\n');
+  const prompt = `These are entries in a notebook titled "${note.title}":\n\n${entriesText}\n\nWrite 2-3 sharp sentences summarising the key learnings and patterns across these entries. Be specific, cite figures where present. No filler.`;
+  try {
+    let summary;
+    if (chatModel === 'claude-cli') {
+      summary = await digestGen.callClaudeCLI('You are a sharp analyst.', prompt);
+    } else {
+      const client = digestGen.getClient(chatModel);
+      const r = await client.chat.completions.create({ model: chatModel, max_tokens: 200, messages: [{ role: 'user', content: prompt }] });
+      summary = r.choices[0].message.content.trim();
+    }
+    note.summary = summary;
+    await storage.setNotes(notes);
+    res.json({ summary });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/notes/:id', async (req, res) => {
+  const notes = await storage.getNotes();
+  const note  = notes.find(n => n.id == req.params.id);
+  if (!note) return res.status(404).json({ error: 'Not found' });
+  if (req.body.title !== undefined) note.title = req.body.title.trim();
+  await storage.setNotes(notes);
+  res.json({ success: true });
+});
+
+app.patch('/api/notes/:id/entries/:eid', async (req, res) => {
+  const notes = await storage.getNotes();
+  const note  = notes.find(n => n.id == req.params.id);
+  if (!note) return res.status(404).json({ error: 'Not found' });
+  const entry = note.entries.find(e => e.id == req.params.eid);
+  if (!entry) return res.status(404).json({ error: 'Not found' });
+  if (req.body.description !== undefined) entry.description = req.body.description;
+  await storage.setNotes(notes);
+  res.json({ success: true });
+});
+
+app.delete('/api/notes/:id', async (req, res) => {
+  const notes = await storage.getNotes();
+  await storage.setNotes(notes.filter(n => n.id != req.params.id));
+  res.json({ success: true });
+});
+
+app.get('/api/notes/:id/similar', async (req, res) => {
+  const notes = await storage.getNotes();
+  const note  = notes.find(n => n.id == req.params.id);
+  if (!note) return res.status(404).json({ error: 'Not found' });
+  if (!process.env.EXA_API_KEY) return res.json({ stories: [] });
+  try {
+    const Exa = require('exa-js').default;
+    const exa = new Exa(process.env.EXA_API_KEY);
+    const query = note.title + (note.entries[0] ? ' ' + note.entries[0].headline.slice(0, 60) : '');
+    const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|placeholder|pixel|tracking|beacon/i;
+    const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|food|recipe|cook|lifestyle|wellness|fitness/i;
+    const res2 = await exa.searchAndContents(query, { numResults: 10, category: 'news', text: { maxCharacters: 400 } });
+    const existingHeadlines = new Set(note.entries.map(e => e.headline?.toLowerCase()));
+    const stories = res2.results
+      .filter(r => r.title && !existingHeadlines.has(r.title.toLowerCase()))
+      .filter(r => !r.image || (!BAD_IMAGE.test(r.image) && !BAD_DOMAIN.test(r.url || '')))
+      .slice(0, 8)
+      .map(r => {
+        const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, '').split('.')[0]; } catch { return ''; } })();
+        const cleanDesc = (r.text || '')
+        .replace(/#{1,6}\s*/g, '')
+        .replace(/SENSEX[\d\s.,+\-#]+/gi, '')
+        .replace(/NIFTY[\d\s.,+\-#]+/gi, '')
+        .replace(/CRUDEOIL[\d\s.,+\-#]+/gi, '')
+        .replace(/Ministry of \w[\w\s&]+ \d{1,2}[-–]\w+,?\s*\d{4}\s*\d{1,2}:\d{2}\s*IST/gi, '')
+        .replace(/^English Releases?\s*/i, '')
+        .replace(/\s{2,}/g, ' ').trim().slice(0, 200);
+      return {
+          headline:  r.title.replace(/^English Releases?\s*/i,'').trim().slice(0, 120),
+          description: cleanDesc,
+          source:    host.charAt(0).toUpperCase() + host.slice(1),
+          sourceUrl: r.url,
+          image:     (!BAD_IMAGE.test(r.image || '') && !BAD_DOMAIN.test(r.url || '')) ? r.image : null,
+        };
+      });
+    res.json({ stories });
+  } catch (e) {
+    console.warn('[notes/similar]', e.message);
+    res.json({ stories: [] });
+  }
+});
+
+app.delete('/api/notes/:id/entries/:eid', async (req, res) => {
+  const notes = await storage.getNotes();
+  const note  = notes.find(n => n.id == req.params.id);
+  if (!note) return res.status(404).json({ error: 'Not found' });
+  note.entries = note.entries.filter(e => e.id != req.params.eid);
+  await storage.setNotes(notes);
   res.json({ success: true });
 });
 
@@ -113,13 +360,37 @@ app.post('/api/push-inbox', async (req, res) => {
 
 // ─── Chat ──────────────────────────────────────────────────────────────────────
 
+async function fetchChatWebContext(query) {
+  if (!process.env.EXA_API_KEY) return '';
+  try {
+    const Exa = require('exa-js').default;
+    const exa = new Exa(process.env.EXA_API_KEY);
+    const res = await exa.searchAndContents(query, {
+      numResults: 3,
+      category:   'news',
+      text:       { maxCharacters: 1000 },
+    });
+    const snippets = res.results
+      .map(r => `[${r.title}](${r.url})\n${r.text || ''}`)
+      .filter(Boolean)
+      .join('\n\n---\n\n');
+    return snippets ? `\n\nLIVE WEB CONTEXT (from Exa search for "${query}"):\n${snippets}` : '';
+  } catch (e) {
+    console.warn('[chat/exa]', e.message);
+    return '';
+  }
+}
+
 app.post('/chat', async (req, res) => {
   const { messages: chatMessages } = req.body;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: 'Add ANTHROPIC_API_KEY to .env to enable chat.' });
+  const { chatModel } = await storage.getSettings();
 
   const lastRun       = await storage.getLastRun();
   const inboxSnapshot = await storage.getInboxSnapshot();
+
+  // Use the last user message as the web search query
+  const lastUserContent = chatMessages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+  const webContext = await fetchChatWebContext(lastUserContent.slice(0, 300));
 
   let digestContext = 'No newsletter digest has been run yet.';
   if (lastRun) {
@@ -144,12 +415,7 @@ app.post('/chat', async (req, res) => {
     });
   }
 
-  const anthropic = new Anthropic({ apiKey });
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 1024,
-      system: `You are a sharp, well-informed personal assistant with full access to the user's email inbox and newsletter digest. Answer questions about news, emails, and anything in the inbox with precision.
+  const CHAT_SYSTEM = `You are a sharp, well-informed personal assistant with full access to the user's email inbox, newsletter digest, and live web search results. Answer with precision and depth.
 
 FORMAT RULES (always follow):
 - Use **bold** for key names, figures, and terms
@@ -159,12 +425,26 @@ FORMAT RULES (always follow):
 - Lead with the most important point; add context only if it adds value
 - Max 3-4 sentences per topic unless asked for more detail
 - If asked about a specific email or sender, search the inbox snapshot data
-- If data is missing from the inbox snapshot, say so clearly
+- Prioritise live web context when answering factual questions about people or events
+- If data is missing, say so clearly
 
-${digestContext}${inboxContext}`,
-      messages: chatMessages,
-    });
-    res.json({ reply: response.content[0].text });
+${digestContext}${inboxContext}${webContext}`;
+
+  try {
+    let reply;
+    if (chatModel === 'claude-cli') {
+      const lastUserMsg = chatMessages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+      reply = await digestGen.callClaudeCLI(CHAT_SYSTEM, lastUserMsg);
+    } else {
+      const client   = digestGen.getClient(chatModel);
+      const response = await client.chat.completions.create({
+        model: chatModel,
+        max_tokens: 1024,
+        messages: [{ role: 'system', content: CHAT_SYSTEM }, ...chatMessages],
+      });
+      reply = response.choices[0].message.content;
+    }
+    res.json({ reply });
   } catch (err) {
     console.error('Chat error:', err.message);
     res.status(500).json({ error: err.message });
@@ -204,15 +484,34 @@ app.get('/api/cron/digest', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
+  if (digestRunning) {
+    send('error', { error: 'Already running — please wait a moment and try again.' });
+    res.flush?.();
+    setTimeout(() => res.end(), 100);
+    return;
+  }
+  digestRunning = true;
+
   try {
-    const { model } = await storage.getSettings();
-    console.log(`[cron/digest] Starting with model: ${model}`);
+    const settings     = await storage.getSettings();
+    const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+    const digestModel  = settings.digestModel  || DEFAULT_MODEL;
+    const clusterModel = settings.clusterModel || DEFAULT_MODEL;
+    const editorModel  = settings.editorModel  || digestModel;
+    // Extract enabled custom sections from settings
+    const customSections = (settings.sections || []).filter(s => s.custom && s.enabled !== false);
+    console.log(`[cron/digest] cluster: ${clusterModel}, digest: ${digestModel}, editor: ${editorModel}, custom: ${customSections.map(s=>s.label).join(',') || 'none'}`);
 
     send('status', { message: 'Fetching emails…' });
     const { entries, cacheHits, cacheMisses } = await gmail.fetchNewsletterHeadlines();
+    console.log(`[cron/digest] entries: ${entries.length}`);
     send('status', { message: `${entries.length} newsletters (${cacheHits} cached, ${cacheMisses} new). Clustering…` });
 
-    const clusters = await clusterer.clusterHeadlines(entries, model);
+    console.log('[cron/digest] starting clustering…');
+    const clusters = await clusterer.clusterHeadlines(entries, clusterModel);
+    console.log(`[cron/digest] clustering done: ${clusters.length} clusters`);
+    send('status', { message: `${clusters.length} unique stories. Fetching article images…` });
+    await exaImages.enrichClustersWithImages(clusters);
     await storage.setClusters({ clusters, generatedAt: new Date().toISOString() });
     send('status', { message: `${clusters.length} unique stories. Checking read history…` });
 
@@ -220,217 +519,175 @@ app.get('/api/cron/digest', async (req, res) => {
     try { readState = await supa.getClusterReadState(); } catch (e) { console.warn('[read-state]', e.message); }
 
     send('status', { message: 'Generating digest…' });
-    const digest = await digestGen.generateDigest(clusters, model, readState);
-    await storage.setLastRun({ ...digest, ranAt: new Date().toISOString(), model });
-    send('done', digest);
+    const digest = await digestGen.generateDigest(clusters, digestModel, readState, customSections, settings.persona || null);
 
-    console.log(`[cron/digest] Done — ${digest.date} | ${clusters.length} clusters → digest`);
+    send('status', { message: 'Editor reviewing for duplicates…' });
+    await editor.editDigest(digest, editorModel, customSections, settings.persona || null);
+
+    // ── Deterministic promotion to top_today (mutually exclusive) ───────────
+    // top_today is the most important section. If it has < 10 newsletter items,
+    // pull the top items from category sections (in priority order) and REMOVE
+    // them from those categories — strict mutual exclusion, top_today wins.
+    {
+      const CATEGORY_PRIORITY = ['us_business', 'global_economies', 'tech', 'india_business', 'politics', 'everything_else'];
+      const top = digest.top_today = digest.top_today || [];
+      const seenInTop = new Set(top.map(i => (i.headline || '').toLowerCase().trim()));
+      let promoted = 0;
+      // Round-robin: take the top remaining newsletter item from each category
+      let madeProgress = true;
+      while (top.length < 10 && madeProgress) {
+        madeProgress = false;
+        for (const cat of CATEGORY_PRIORITY) {
+          if (top.length >= 10) break;
+          const items = digest[cat] || [];
+          // Find the first newsletter item not already in top_today
+          const idx = items.findIndex(i => !i.internetSource && !seenInTop.has((i.headline || '').toLowerCase().trim()));
+          if (idx === -1) continue;
+          const [item] = items.splice(idx, 1);   // MOVE: remove from category
+          seenInTop.add((item.headline || '').toLowerCase().trim());
+          top.push(item);
+          promoted++;
+          madeProgress = true;
+        }
+      }
+      console.log(`[cron/digest] promoted ${promoted} newsletter items to top_today (now ${top.length} total)`);
+    }
+
+    // Internet fallback runs SYNCHRONOUSLY before 'done' — it directly affects
+    // what categories the user sees, and it's fast (Exa searches, no LLM).
+    if (settings.internetFallback) {
+      send('status', { message: 'Filling thin categories from web…' });
+      try {
+        await internetFallback.applyInternetFallback(digest, customSections, digestModel);
+      } catch (e) {
+        console.error('[cron/digest] internet fallback error:', e.message);
+      }
+    }
+
+    // ── Save core digest immediately so user sees results fast ──────────────
+    const now = new Date();
+    const todayLabel = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    digest.date = todayLabel;
+    digest.ranAt = now.toISOString();
+    digest.clusterModel = clusterModel;
+    digest.digestModel  = digestModel;
+    await storage.setLastRun(digest);
+    const merged = await storage.getLastRun(); // includes carried-over enrichment
+    send('done', merged); // Unblock the UI immediately
+
+    // ── Background enrichment (doesn't block SSE response) ──────────────────
+    const enrichAsync = async () => {
+      try {
+        // Run topic clusters and story enricher in parallel — deep dives appear ASAP
+        const [clusters_result] = await Promise.all([
+          topicClusters.buildTopicClusters(digest, settings.internetFallback, digestModel)
+            .then(tc => {
+              digest.topic_clusters = tc;
+              return storage.setLastRun(digest); // save as soon as deep dives are ready
+            })
+            .catch(e => console.error('[cron/digest] topic clusters error:', e.message)),
+
+          storyEnricher.enrichTopStories(digest.top_today, digestModel)
+            .catch(e => console.error('[cron/digest] story enricher error:', e.message)),
+        ]);
+
+        if (settings.internetFallback) {
+          const topHeadlines  = (digest.top_today || []).map(s => s.headline);
+          const lastRun2      = await storage.getLastRun();
+          const seenChartUrls = new Set((lastRun2?.charts || []).map(c => c.sourceUrl).filter(Boolean));
+          digest.charts = await charts.fetchChartsOfDay(topHeadlines, seenChartUrls, digestModel)
+            .catch(e => { console.error('[cron/digest] charts error:', e.message); return []; });
+        }
+
+        await storage.setLastRun(digest);
+        // Re-archive history with the enriched digest so /api/digest/<date> matches /last-run
+        const histAfter = await storage.getDigestHistory();
+        histAfter[dateKey] = digest;
+        await storage.setDigestHistory(histAfter);
+        console.log('[cron/digest] background enrichment complete');
+      } catch (e) {
+        console.error('[cron/digest] background enrichment error:', e.message);
+      }
+    };
+    // Archive core digest to history immediately (will be re-archived when enrichment finishes)
+    const _y = now.getFullYear(), _m = String(now.getMonth()+1).padStart(2,'0'), _d = String(now.getDate()).padStart(2,'0');
+    const dateKey = `${_y}-${_m}-${_d}`;
+    const history = await storage.getDigestHistory();
+    history[dateKey] = digest;
+    const keys = Object.keys(history).sort().slice(-30);
+    const pruned = {};
+    keys.forEach(k => { pruned[k] = history[k]; });
+    await storage.setDigestHistory(pruned);
+
+    enrichAsync(); // fire-and-forget — enriches in background, updates lastRun again when done
+
+    console.log(`[cron/digest] Core done — ${digest.date} | ${clusters.length} clusters → digest`);
   } catch (err) {
     console.error('[cron/digest] Error:', err.message);
     send('error', { error: err.message });
   } finally {
+    digestRunning = false;
     res.end();
   }
 });
 
-// ─── Loan Risk Scoring ─────────────────────────────────────────────────────────
+// ─── Persona Trainer ───────────────────────────────────────────────────────────
 
-const LOAN_EXTRACTION_PROMPT = `Extract loan application data from this document. Return ONLY a JSON object with these exact fields (null for any field you cannot determine):
+const trainer = require('./lib/persona-trainer');
+const VALID_PERSONAS = ['researcher', 'reporter', 'editor'];
 
-{
-  "applicant_name": null,
-  "credit_score": null,
-  "dti_ratio": null,
-  "employment_type": null,
-  "employment_years": null,
-  "annual_income": null,
-  "loan_amount": null,
-  "loan_purpose": null,
-  "narrative_factors": []
-}
-
-Field rules:
-- credit_score: integer (e.g. 720)
-- dti_ratio: percentage as a number (e.g. 35 means 35%). If you see monthly debt and monthly income, compute (debt/income)*100.
-- employment_type: one of "full-time" | "self-employed" | "part-time" | "unstable" | "unemployed"
-- employment_years: decimal years in current role (e.g. 2.5)
-- annual_income: gross annual income in USD (integer)
-- loan_amount: requested loan in USD (integer)
-- narrative_factors: ONLY include factors actually present in the document. Each item: { "factor": "recent job gap" | "multiple late payments" | "income volatility" | "recent bankruptcy" | "financial distress purpose", "adjustment": 2-6 }
-  Use adjustment 2=minor, 4=moderate, 6=severe. Financial distress purpose includes debt consolidation, medical bills, avoiding foreclosure.
-
-Return ONLY the JSON object, no other text.`;
-
-function computeLoanPD(fields) {
-  const {
-    credit_score, dti_ratio, employment_type, employment_years,
-    annual_income, loan_amount, narrative_factors = []
-  } = fields;
-
-  let pd = 8;
-  let pdLti = 8;
-  const breakdown = [{ label: 'Base Rate', adjustment: 8, running: 8 }];
-
-  if (credit_score != null) {
-    const adj = credit_score >= 760 ? -4 : credit_score >= 720 ? -2 :
-                credit_score >= 680 ? 0  : credit_score >= 640 ? 4 : 8;
-    pd += adj; pdLti += adj;
-    breakdown.push({ label: `Credit Score (${credit_score})`, adjustment: adj, running: pd });
-  }
-
-  if (dti_ratio != null) {
-    const adj = dti_ratio <= 30 ? -3 : dti_ratio <= 40 ? 0 : dti_ratio <= 50 ? 4 : 8;
-    pd += adj; pdLti += adj;
-    breakdown.push({ label: `DTI Ratio (${dti_ratio}%)`, adjustment: adj, running: pd });
-  }
-
-  {
-    const type = (employment_type || '').toLowerCase();
-    const yrs  = Number(employment_years) || 0;
-    let adj;
-    if (type.includes('full') && yrs >= 3)      adj = -2;
-    else if (type.includes('full') && yrs >= 1)  adj =  0;
-    else if (type.includes('self') && yrs >= 2)  adj =  2;
-    else                                          adj =  5;
-    pd += adj; pdLti += adj;
-    breakdown.push({ label: `Employment (${employment_type || 'unknown'}, ${yrs}yr)`, adjustment: adj, running: pd });
-  }
-
-  let ltiPct = null;
-  if (loan_amount != null && annual_income > 0) {
-    ltiPct = (loan_amount / annual_income) * 100;
-    const adj = ltiPct <= 30 ? -2 : ltiPct <= 50 ? 0 : ltiPct <= 70 ? 3 : 6;
-    pd    += adj;
-    pdLti += adj * 2;
-    breakdown.push({ label: `Loan-to-Income (${ltiPct.toFixed(0)}%)`, adjustment: adj, running: pd });
-  }
-
-  const narrativeTotal = narrative_factors.reduce((s, f) => s + (Number(f.adjustment) || 3), 0);
-  if (narrativeTotal > 0) {
-    pd += narrativeTotal; pdLti += narrativeTotal;
-    breakdown.push({
-      label: `Narrative Risk (${narrative_factors.length} factor${narrative_factors.length !== 1 ? 's' : ''})`,
-      adjustment: narrativeTotal, running: pd
-    });
-  }
-
-  pd    = Math.max(1, Math.min(60, Math.round(pd)));
-  pdLti = Math.max(1, Math.min(60, Math.round(pdLti)));
-
-  const primary_risk_drivers = breakdown
-    .filter(b => b.adjustment > 0 && b.label !== 'Base Rate')
-    .sort((a, b) => b.adjustment - a.adjustment)
-    .slice(0, 3)
-    .map(b => b.label);
-
-  return { pd, pd_lti_weighted: pdLti, breakdown, lti: ltiPct ? Math.round(ltiPct) : null, primary_risk_drivers };
-}
-
-app.post('/api/loan-extract', async (req, res) => {
-  const { pdf_base64 } = req.body;
-  if (!pdf_base64) return res.status(400).json({ error: 'pdf_base64 required' });
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  const anthropic = new Anthropic({ apiKey });
+// Generate synthetic input + run persona on it
+app.post('/api/train/:persona/generate', async (req, res) => {
+  const { persona } = req.params;
+  if (!VALID_PERSONAS.includes(persona)) return res.status(400).json({ error: 'Unknown persona' });
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 1024,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf_base64 } },
-          { type: 'text', text: LOAN_EXTRACTION_PROMPT }
-        ]
-      }]
-    });
-    const text = response.content[0].text.trim();
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('Model did not return valid JSON');
-    res.json({ extracted: JSON.parse(match[0]) });
-  } catch (err) {
-    console.error('loan-extract error:', err.message);
-    res.status(500).json({ error: err.message });
+    const settings       = await storage.getSettings();
+    // Never use claude-cli for trainer — it's too slow and interactive; fall back to Groq
+    const rawModel = settings[`${persona === 'researcher' ? 'cluster' : persona}Model`] || settings.digestModel;
+    const model    = rawModel === 'claude-cli' ? 'llama-3.3-70b-versatile' : rawModel;
+    const syntheticInput = await trainer.generateSynthetic(persona, model);
+    const personaOutput  = await trainer.runPersonaOnSynthetic(persona, syntheticInput, model);
+    res.json({ syntheticInput, personaOutput });
+  } catch (e) {
+    console.error(`[trainer/${persona}] generate error:`, e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-app.post('/api/loan-score', (req, res) => {
-  const { fields } = req.body;
-  if (!fields) return res.status(400).json({ error: 'fields required' });
-  try { res.json(computeLoanPD(fields)); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+// Save user feedback on a training scenario
+app.post('/api/train/:persona/feedback', async (req, res) => {
+  const { persona } = req.params;
+  if (!VALID_PERSONAS.includes(persona)) return res.status(400).json({ error: 'Unknown persona' });
+  const { syntheticInput, personaOutput, userFeedback, approvedOutput } = req.body;
+  try {
+    const settings = await storage.getSettings();
+    const model    = settings.digestModel;
+    const data     = await trainer.saveTrainingExample(persona, { syntheticInput, personaOutput, userFeedback, approvedOutput });
+    // Distill rules after every 3 examples
+    let rules = data.rules || [];
+    if (data.examples.length % 3 === 0) rules = await trainer.distillRules(persona, model);
+    res.json({ saved: true, totalExamples: data.examples.length, rules });
+  } catch (e) {
+    console.error(`[trainer/${persona}] feedback error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.post('/api/loan-analyze', async (req, res) => {
-  const { fields, pd_result } = req.body;
-  if (!fields) return res.status(400).json({ error: 'fields required' });
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+// Get current training data + rules for a persona
+app.get('/api/train/:persona', async (req, res) => {
+  const { persona } = req.params;
+  if (!VALID_PERSONAS.includes(persona)) return res.status(400).json({ error: 'Unknown persona' });
+  const data = await trainer.getTrainingData(persona);
+  res.json({ examples: data.examples.length, rules: data.rules || [] });
+});
 
-  const { pd, breakdown, primary_risk_drivers, lti } = pd_result || {};
-  const profile = [
-    `Credit Score: ${fields.credit_score ?? 'Unknown'}`,
-    `DTI Ratio: ${fields.dti_ratio != null ? fields.dti_ratio + '%' : 'Unknown'}`,
-    `Employment: ${fields.employment_type ?? 'Unknown'}, ${fields.employment_years ?? '?'} years`,
-    `Annual Income: ${fields.annual_income ? '$' + Number(fields.annual_income).toLocaleString() : 'Unknown'}`,
-    `Loan Amount: ${fields.loan_amount ? '$' + Number(fields.loan_amount).toLocaleString() : 'Unknown'}`,
-    `Loan-to-Income: ${lti != null ? lti + '%' : 'Unknown'}`,
-    `Loan Purpose: ${fields.loan_purpose || 'Not specified'}`,
-    `Narrative Risks Present: ${(fields.narrative_factors || []).map(f => f.factor).join(', ') || 'None identified'}`,
-  ].join('\n');
-
-  const scoring = [
-    `Rule-Based PD: ${pd ?? '?'}%`,
-    `Breakdown: ${(breakdown || []).map(b => `${b.label} ${b.adjustment > 0 ? '+' : ''}${b.adjustment}%`).join(' | ')}`,
-    `Flagged Drivers: ${(primary_risk_drivers || []).join(', ') || 'None'}`,
-  ].join('\n');
-
-  const prompt = `You are an expert loan underwriter with 20 years of experience at a major bank. A rule-based model has already scored this applicant — your job is to provide the qualitative layer a rules engine cannot.
-
-APPLICANT PROFILE:
-${profile}
-
-RULE-BASED SCORING:
-${scoring}
-
-Analyze holistically. Surface risks and insights NOT already reflected in the five scoring factors (credit score, DTI, employment stability, LTI, identified narrative factors). Consider:
-- Compounding effects where multiple weaknesses amplify each other beyond their individual scores
-- Income sustainability and sector/employment-type risk
-- Loan purpose risk and whether the requested amount makes sense for the stated purpose
-- Inconsistencies or unusual patterns in the profile
-- Positive compensating factors the rules may have discounted
-- Payment capacity: approximate monthly payment burden relative to likely take-home pay
-- Whether the PD seems appropriate, too lenient, or too conservative given the full picture
-
-Return ONLY this JSON (max 4 items per array, each item under 130 characters):
-{
-  "headline_assessment": "2 sentences: overall risk read on this specific applicant, not generic",
-  "hidden_risks": ["specific risk not already penalised by the scoring model"],
-  "compounding_factors": ["where two or more factors interact to make the risk worse than the sum of parts"],
-  "mitigating_factors": ["genuine positive signals that offset risk — omit if none"],
-  "recommendation": "APPROVE" | "APPROVE WITH CONDITIONS" | "REFER FOR REVIEW" | "DECLINE",
-  "recommendation_note": "one sentence rationale under 120 chars",
-  "claude_pd": <integer 1-60, your independent holistic PD estimate>,
-  "claude_pd_reasoning": "1-2 sentences explaining specifically why you landed on this number"
-}`;
-
-  const anthropic = new Anthropic({ apiKey });
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }]
-    });
-    const text  = response.content[0].text.trim();
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('Model did not return valid JSON');
-    const result = JSON.parse(match[0]);
-    result._usage = response.usage;
-    res.json(result);
-  } catch (err) {
-    console.error('loan-analyze error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+// Manually trigger rule distillation
+app.post('/api/train/:persona/distill', async (req, res) => {
+  const { persona } = req.params;
+  if (!VALID_PERSONAS.includes(persona)) return res.status(400).json({ error: 'Unknown persona' });
+  const settings = await storage.getSettings();
+  const rules    = await trainer.distillRules(persona, settings.digestModel);
+  res.json({ rules });
 });
 
 // ─── Start ─────────────────────────────────────────────────────────────────────

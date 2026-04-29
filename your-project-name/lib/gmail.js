@@ -78,6 +78,7 @@ function extractBodyText(msg, maxChars = 2500) {
 
   return text
     .replace(/https?:\/\/\S+/g, '')          // strip URLs
+    .replace(/\u200C|\u200B|\u00AD|\uFEFF/g, '') // strip zero-width/invisible chars
     .replace(/[^\S\n]{2,}/g, ' ')             // collapse inline spaces
     .replace(/\n{3,}/g, '\n\n')               // max 2 blank lines
     .trim()
@@ -85,8 +86,7 @@ function extractBodyText(msg, maxChars = 2500) {
 }
 
 /**
- * Extract external image URLs from an email (for card thumbnails).
- * Returns up to 3 https image URLs, skipping tracking pixels (<= 5px implied by name).
+ * Extract external image URLs from an email (Exa handles real article images).
  */
 function extractImageUrls(msg) {
   const html = extractHtml(msg.payload);
@@ -96,8 +96,7 @@ function extractImageUrls(msg) {
   let m;
   while ((m = re.exec(html)) !== null) {
     const url = m[1];
-    // Skip tiny tracking pixels (common patterns)
-    if (/open\.|track|pixel|beacon|spacer/i.test(url)) continue;
+    if (/open\.|track|pixel|beacon|spacer|logo|header|padded/i.test(url)) continue;
     if (!urls.includes(url)) urls.push(url);
     if (urls.length >= 3) break;
   }
@@ -163,8 +162,18 @@ async function fetchNewsletterHeadlines() {
       const headers  = msg.payload?.headers ?? [];
       const get      = name => headers.find(h => h.name.toLowerCase() === name)?.value ?? '';
       const from     = get('from');
-      const source   = getSource(from, sources);
+      const subject  = get('subject');
       const bodyText = extractBodyText(msg);
+
+      // For forwarded emails the outer `from` is the user, not the newsletter.
+      // Try to recover the original sender from the forward header in the body.
+      let source = getSource(from, sources);
+      const isForward = /^(fw|fwd):/i.test(subject.trim());
+      if (isForward && source === getSource(from, [])) {
+        // source fell through to display-name fallback — try the original sender
+        const fwFrom = bodyText.match(/^From:\s*(.+)/m)?.[1] ?? '';
+        if (fwFrom) source = getSource(fwFrom, sources);
+      }
       const imageUrls = extractImageUrls(msg);
 
       const entry = { id, source, bodyText, imageUrls, cachedAt: new Date().toISOString() };

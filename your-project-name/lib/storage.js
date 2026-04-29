@@ -48,12 +48,39 @@ async function setKey(key, value) {
 const getSources       = ()  => getKey('sources').then(v => v ?? []);
 const setSources       = arr => setKey('sources', arr);
 const getLastRun       = ()  => getKey('lastRun');
-const setLastRun       = d   => setKey('lastRun', d);
+
+// Enrichment fields live alongside the core digest in lastRun, but they're produced
+// asynchronously (background enrichment) and shouldn't be wiped when a new core
+// digest is saved. setLastRun merges into existing lastRun at the top level.
+// On date change, stale enrichment is auto-cleared so we don't show yesterday's
+// deep dives next to today's headlines.
+// Fields that go stale when the digest's date changes (clear them).
+// Note: chartOfDay is keyed by dateKey internally, so it's preserved across days.
+const ENRICHMENT_FIELDS = ['topic_clusters', 'charts'];
+
+async function setLastRun(d, opts = {}) {
+  if (opts.replace) return setKey('lastRun', d);
+  const existing = (await getKey('lastRun')) || {};
+  const merged   = { ...existing, ...d };
+  if (existing.date && d.date && existing.date !== d.date) {
+    for (const f of ENRICHMENT_FIELDS) {
+      if (!(f in d)) delete merged[f];
+    }
+  }
+  return setKey('lastRun', merged);
+}
 const getInboxSnapshot = ()  => getKey('inboxSnapshot');
 const setInboxSnapshot = s   => setKey('inboxSnapshot', s);
 const getGmailTokens   = ()  => getKey('gmail_tokens');
 const setGmailTokens   = t   => setKey('gmail_tokens', t);
-const getSettings      = ()  => getKey('settings').then(v => v ?? { model: 'qwen-turbo' });
+const DEFAULT_SETTINGS = {
+  clusterModel:     'llama-3.3-70b-versatile',
+  digestModel:      'llama-3.3-70b-versatile',
+  editorModel:      'llama-3.3-70b-versatile',
+  chatModel:        'llama-3.3-70b-versatile',
+  internetFallback: true,
+};
+const getSettings = () => getKey('settings').then(v => ({ ...DEFAULT_SETTINGS, ...(v ?? {}) }));
 const setSettings      = s   => setKey('settings', s);
 const getClusters      = ()  => getKey('clusters');
 const setClusters      = c   => setKey('clusters', c);
@@ -75,6 +102,11 @@ async function setEmailCache(cache) {
   return setKey('emailCache', cache);
 }
 
+const getNotes        = ()        => getKey('notes').then(v => v ?? []);
+const setNotes        = (notes)   => setKey('notes', notes);
+const getDigestHistory = ()       => getKey('digestHistory').then(v => v ?? {});
+const setDigestHistory = (h)      => setKey('digestHistory', h);
+
 module.exports = {
   isVercel,
   getKey, setKey,
@@ -85,4 +117,6 @@ module.exports = {
   getSettings, setSettings,
   getClusters, setClusters,
   getEmailCache, setEmailCache,
+  getNotes, setNotes,
+  getDigestHistory, setDigestHistory,
 };

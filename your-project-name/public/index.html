@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Newsletter Digest</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -12,9 +13,11 @@
     <div class="app-title">Newsletter Digest</div>
     <nav class="tabs">
       <button class="tab active" data-tab="digest">Digest</button>
+      <button class="tab" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="notebook">Notebook</button>
       <button class="tab" data-tab="sources">Sources</button>
       <button class="tab" data-tab="readmap">Read Map</button>
-      <button class="tab" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="persona">Persona</button>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
     <div class="claude-badge">⚡ Powered by Claude MCP</div>
@@ -27,7 +30,10 @@
         <h2 id="digestTitle">Newsletter Digest</h2>
         <p id="digestMeta" class="meta"></p>
       </div>
-      <button id="refreshBtn" class="btn-primary">↻ Refresh</button>
+      <div class="digest-header-right">
+        <div class="date-rolodex" id="dateRolodex"></div>
+        <button id="refreshBtn" class="btn-primary">↻ Refresh</button>
+      </div>
     </div>
 
     <div id="runStatus" class="status-bar hidden"></div>
@@ -52,19 +58,96 @@
         <button class="inner-tab" data-cat="everything_else">Everything Else</button>
       </nav>
       <div id="newsPanel" class="news-panel"></div>
+
+      <!-- Deep dive topic clusters (top_today only) -->
+      <div id="topicClusters" class="hidden"></div>
+
+      <!-- Charts of the Day (top_today only) -->
+      <div id="chartsOfDay" class="hidden"></div>
+
+      <!-- Topics block -->
+      <div id="topicsBlock" class="topics-block hidden">
+        <div class="topics-header">
+          <span class="topics-title">Topics</span>
+          <button id="topicsViewAll" class="topics-view-all">View all</button>
+        </div>
+        <div id="topicChips" class="topic-chips"></div>
+        <div id="topicStories" class="topic-stories hidden"></div>
+      </div>
+
+      <div class="tab-explainer">
+        <div class="tab-explainer-title">How Digest works</div>
+        <div class="tab-explainer-items">
+          <div class="te-item"><span class="te-icon">🗞️</span><div><strong>Newsletter-first</strong> — pulls from the newsletters you've forwarded to Gmail, then fills gaps from the open web.</div></div>
+          <div class="te-item"><span class="te-icon">🧹</span><div><strong>Editor pass</strong> — an AI editor removes cross-section duplicates and keeps each category on-topic.</div></div>
+          <div class="te-item"><span class="te-icon">🔍</span><div><strong>Deep dives</strong> — the Topics section beneath Today's Top 10 pulls 4–5 distinct angles on each major story from the web.</div></div>
+          <div class="te-item"><span class="te-icon">💬</span><div><strong>Card chat</strong> — tap the chat bubble on any card to open a pre-loaded chat with context on exactly that story.</div></div>
+        </div>
+      </div>
     </div>
   </section>
+
+  <!-- ─── NOTEBOOK TAB ─── -->
+  <section class="tab-content hidden" id="tab-notebook">
+    <div class="nb-header">
+      <h2>Notebook</h2>
+      <button id="newNoteBtn" class="btn-primary">+ New note</button>
+    </div>
+    <div id="noteList" class="note-list"></div>
+
+    <div class="tab-explainer">
+      <div class="tab-explainer-title">How Notebook works</div>
+      <div class="tab-explainer-items">
+        <div class="te-item"><span class="te-icon">📓</span><div><strong>Save from any card</strong> — hit the 📓 button on a news card to clip it into a note for later.</div></div>
+        <div class="te-item"><span class="te-icon">✏️</span><div><strong>Editable</strong> — click the title or description text directly to edit inline. Changes save automatically on blur.</div></div>
+        <div class="te-item"><span class="te-icon">🔗</span><div><strong>Related reading</strong> — each note auto-fetches 4–5 similar stories from the web so you can go deeper.</div></div>
+        <div class="te-item"><span class="te-icon">🤖</span><div><strong>AI summary</strong> — generate a one-paragraph synthesis across all clippings in a note.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Add-to-notebook modal -->
+  <div id="notebookModal" class="nb-modal hidden">
+    <div class="nb-modal-box">
+      <div class="nb-modal-title">Add to Notebook</div>
+      <div class="nb-modal-story" id="nbModalStory"></div>
+      <div class="nb-modal-label">Choose a note or create one</div>
+      <select id="nbNoteSelect" class="nb-select"></select>
+      <input type="text" id="nbNewNoteInput" class="nb-new-input" placeholder="Or type a new note name…" />
+      <div class="nb-modal-actions">
+        <button id="nbCancelBtn" class="btn-secondary">Cancel</button>
+        <button id="nbSaveBtn" class="btn-primary">Add</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ─── READ MAP TAB ─── -->
   <section class="tab-content hidden" id="tab-readmap">
     <h2>Read Map</h2>
     <p class="meta">Stories you've read today, grouped by cluster topic.</p>
     <div id="readMapList" class="cluster-list"></div>
+
+    <div class="tab-explainer">
+      <div class="tab-explainer-title">How Read Map works</div>
+      <div class="tab-explainer-items">
+        <div class="te-item"><span class="te-icon">🗺️</span><div><strong>Auto-tracks reading</strong> — any card you spend 5+ seconds on is marked as read.</div></div>
+        <div class="te-item"><span class="te-icon">🧩</span><div><strong>Grouped by topic</strong> — stories are clustered so you can see which themes you've been following.</div></div>
+      </div>
+    </div>
   </section>
 
   <!-- ─── SOURCES TAB ─── -->
   <section class="tab-content hidden" id="tab-sources">
     <h2>Sources</h2>
+
+    <div class="source-item" style="margin-bottom:16px">
+      <div class="source-info">
+        <strong>🌐 Open Internet</strong>
+        <span class="source-email">Exa web search — fills gaps, enriches topics, charts</span>
+      </div>
+      <label class="toggle"><input type="checkbox" id="internetFallbackToggle" checked /><span class="slider"></span></label>
+    </div>
+
     <p class="meta">Add the newsletter names you forward to Gmail. Toggle off any you want Claude to skip.</p>
     <div class="add-source-row">
       <input type="text" id="newSourceInput" placeholder="Name, e.g. TechCrunch" />
@@ -74,6 +157,15 @@
     </div>
     <p class="source-hint">The sender email is in the forwarded email body — look for "From: …" inside the email.</p>
     <ul id="sourceList" class="source-list"></ul>
+
+    <div class="tab-explainer">
+      <div class="tab-explainer-title">How Sources works</div>
+      <div class="tab-explainer-items">
+        <div class="te-item"><span class="te-icon">📬</span><div><strong>Forward newsletters</strong> — forward any newsletter to your Gmail and add the sender email here so Claude can find it.</div></div>
+        <div class="te-item"><span class="te-icon">🌐</span><div><strong>Open Internet</strong> — when newsletters don't cover a category, Exa web search fills the gaps automatically.</div></div>
+        <div class="te-item"><span class="te-icon">🔀</span><div><strong>Toggle anytime</strong> — turn off any source you want Claude to ignore on the next run.</div></div>
+      </div>
+    </div>
   </section>
 
   <!-- ─── CHAT TAB ─── -->
@@ -95,25 +187,327 @@
       <textarea id="chatInput" placeholder="Ask about today's news, a specific email, sender…" rows="2"></textarea>
       <button id="chatSend" class="btn-primary">Send</button>
     </div>
+
+    <div class="tab-explainer">
+      <div class="tab-explainer-title">How Chat works</div>
+      <div class="tab-explainer-items">
+        <div class="te-item"><span class="te-icon">🃏</span><div><strong>Card context</strong> — tap the chat bubble on any news card and Chat opens pre-loaded with that story's context.</div></div>
+        <div class="te-item"><span class="te-icon">🌐</span><div><strong>Internet search</strong> — answers are enriched with live web results so you get sharp, up-to-date responses.</div></div>
+        <div class="te-item"><span class="te-icon">📥</span><div><strong>Full inbox access</strong> — ask about specific senders, subjects, or email threads, not just the digest.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── PERSONA TAB ─── -->
+  <section class="tab-content hidden" id="tab-persona">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <h2 style="margin:0">Your Persona</h2>
+      <span class="persona-autosave">✓ Auto-saves on tap</span>
+    </div>
+    <p class="meta">Help the digest understand how you think. Takes effect on the next run.</p>
+
+    <div class="persona-questions" id="personaQuestions">
+      <div class="pq-item" data-key="format">
+        <div class="pq-label">Do you learn better through numbers or stories?</div>
+        <div class="pq-options">
+          <button class="pq-btn" data-val="numbers">📊 Numbers &amp; data</button>
+          <button class="pq-btn" data-val="stories">📖 Narrative &amp; context</button>
+        </div>
+      </div>
+      <div class="pq-item" data-key="scope">
+        <div class="pq-label">Where's your primary business focus?</div>
+        <div class="pq-options">
+          <button class="pq-btn" data-val="india">🇮🇳 India-first</button>
+          <button class="pq-btn" data-val="global">🌍 Global</button>
+        </div>
+      </div>
+      <div class="pq-item" data-key="angle">
+        <div class="pq-label">What matters more to you in business news?</div>
+        <div class="pq-options">
+          <button class="pq-btn" data-val="investing">📈 Markets &amp; investing</button>
+          <button class="pq-btn" data-val="operations">🏭 Operations &amp; strategy</button>
+        </div>
+      </div>
+      <div class="pq-item" data-key="speed">
+        <div class="pq-label">What kind of coverage do you prefer?</div>
+        <div class="pq-options">
+          <button class="pq-btn" data-val="breaking">⚡ Breaking &amp; fast</button>
+          <button class="pq-btn" data-val="analysis">🔬 Deep analysis</button>
+        </div>
+      </div>
+      <div class="pq-item" data-key="politics">
+        <div class="pq-label">How much politics do you want in your feed?</div>
+        <div class="pq-options">
+          <button class="pq-btn" data-val="lots">🏛️ Lots — I follow policy closely</button>
+          <button class="pq-btn" data-val="minimal">🙅 Minimal — only if it affects markets</button>
+        </div>
+      </div>
+      <div class="pq-item" data-key="tech">
+        <div class="pq-label">How much tech coverage do you want?</div>
+        <div class="pq-options">
+          <button class="pq-btn" data-val="heavy">🤖 Heavy — AI, startups, everything</button>
+          <button class="pq-btn" data-val="light">💡 Light — only big tech moves</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="persona-sections-block">
+      <div class="persona-sections-title">Your News Sections</div>
+      <p class="meta" style="margin-bottom:12px">These are the categories that appear in your digest. Add, rename, or remove them.</p>
+      <ul id="personaSectionList" class="persona-section-list"></ul>
+      <div class="persona-add-row">
+        <input type="text" id="newSectionInput" placeholder="e.g. Climate &amp; Energy, Sports Business…" />
+        <button id="addSectionBtn" class="btn-primary">Add</button>
+      </div>
+    </div>
+
+    <div style="margin-top:20px">
+      <button id="personaSaveBtn" class="btn-primary" style="width:100%;padding:12px">Save Persona</button>
+      <p id="personaSaveStatus" class="meta" style="margin-top:10px;color:var(--gold);text-align:center"></p>
+    </div>
+
+    <div class="tab-explainer">
+      <div class="tab-explainer-title">How Persona works</div>
+      <div class="tab-explainer-items">
+        <div class="te-item"><span class="te-icon">🎯</span><div><strong>Shapes the digest</strong> — your answers influence which stories get prioritised and how descriptions are framed on the next run.</div></div>
+        <div class="te-item"><span class="te-icon">🗂️</span><div><strong>Manage sections</strong> — toggle off categories you don't care about, or add custom ones like "Climate" or "Sports Business".</div></div>
+        <div class="te-item"><span class="te-icon">💾</span><div><strong>Auto-saves on tap</strong> — question answers save instantly; hit Save Persona to commit section changes.</div></div>
+      </div>
+    </div>
   </section>
 
   <!-- ─── SETTINGS TAB ─── -->
   <section class="tab-content hidden" id="tab-settings">
-    <h2>Settings</h2>
-    <p class="meta">Configure how digests are generated.</p>
-    <div class="settings-row">
-      <label class="settings-label" for="modelPicker">Digest model</label>
-      <select id="modelPicker" class="model-picker">
-        <option value="qwen-turbo">Qwen Turbo (fast, cheap)</option>
-        <option value="qwen-plus">Qwen Plus</option>
-        <option value="qwen-max">Qwen Max</option>
-        <option value="claude-haiku-4-5-20251001">Claude Haiku</option>
-        <option value="claude-sonnet-4-6">Claude Sonnet</option>
-        <option value="claude-opus-4-6">Claude Opus</option>
-      </select>
+    <h2>Model Settings</h2>
+    <p class="meta">Choose which model powers each part of the process. Changes take effect on the next run.</p>
+
+    <div class="model-group">
+      <div class="model-group-label">API Keys</div>
+
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <span class="settings-label">Anthropic API Key</span>
+          <span class="settings-hint" id="anthropicKeyHint">Required to use Claude Sonnet/Opus/Haiku models below. Stored locally only.</span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="password" id="anthropicApiKey" class="model-picker" placeholder="sk-ant-..." autocomplete="off" style="min-width:240px;" />
+          <button type="button" id="saveAnthropicKey" class="btn-small">Save</button>
+        </div>
+      </div>
     </div>
-    <p id="modelSaveStatus" class="meta" style="margin-top:8px;color:var(--gold)"></p>
+
+    <div class="model-group">
+      <div class="model-group-label">Digest Pipeline</div>
+
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <span class="settings-label">News Researcher</span>
+          <span class="settings-hint">Reads newsletters and groups stories by topic</span>
+        </div>
+        <select id="clusterModelPicker" class="model-picker" data-key="clusterModel">
+          <optgroup label="Claude CLI (no API key)">
+            <option value="claude-cli">Claude (local terminal session)</option>
+          </optgroup>
+          <optgroup label="Anthropic API (uses your key)">
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-opus-4-7">Claude Opus 4.7</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+          </optgroup>
+          <optgroup label="Groq — Llama (free)">
+            <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+            <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
+            <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+          </optgroup>
+          <optgroup label="DeepSeek">
+            <option value="deepseek-chat">DeepSeek V3</option>
+            <option value="deepseek-reasoner">DeepSeek R1 (reasoning)</option>
+          </optgroup>
+          <optgroup label="Qwen">
+            <option value="qwen-max">Qwen Max</option>
+            <option value="qwen-plus">Qwen Plus</option>
+            <option value="qwen-turbo">Qwen Turbo</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <span class="settings-label">Reporter</span>
+          <span class="settings-hint">Writes headlines and descriptions from story clusters</span>
+        </div>
+        <select id="digestModelPicker" class="model-picker" data-key="digestModel">
+          <optgroup label="Claude CLI (no API key)">
+            <option value="claude-cli">Claude (local terminal session)</option>
+          </optgroup>
+          <optgroup label="Anthropic API (uses your key)">
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-opus-4-7">Claude Opus 4.7</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+          </optgroup>
+          <optgroup label="Groq — Llama (free)">
+            <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+            <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
+            <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+          </optgroup>
+          <optgroup label="DeepSeek">
+            <option value="deepseek-chat">DeepSeek V3</option>
+            <option value="deepseek-reasoner">DeepSeek R1 (reasoning)</option>
+          </optgroup>
+          <optgroup label="Qwen">
+            <option value="qwen-max">Qwen Max</option>
+            <option value="qwen-plus">Qwen Plus</option>
+            <option value="qwen-turbo">Qwen Turbo</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <span class="settings-label">Editor</span>
+          <span class="settings-hint">Reviews the full digest to remove duplicates and enforce section discipline</span>
+        </div>
+        <select id="editorModelPicker" class="model-picker" data-key="editorModel">
+          <optgroup label="Claude CLI (no API key)">
+            <option value="claude-cli">Claude (local terminal session)</option>
+          </optgroup>
+          <optgroup label="Anthropic API (uses your key)">
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-opus-4-7">Claude Opus 4.7</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+          </optgroup>
+          <optgroup label="Groq — Llama (free)">
+            <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+            <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
+            <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+          </optgroup>
+          <optgroup label="DeepSeek">
+            <option value="deepseek-chat">DeepSeek V3</option>
+            <option value="deepseek-reasoner">DeepSeek R1 (reasoning)</option>
+          </optgroup>
+          <optgroup label="Qwen">
+            <option value="qwen-max">Qwen Max</option>
+            <option value="qwen-plus">Qwen Plus</option>
+            <option value="qwen-turbo">Qwen Turbo</option>
+          </optgroup>
+        </select>
+      </div>
+    </div>
+
+    <div class="model-group">
+      <div class="model-group-label">Features</div>
+
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <span class="settings-label">Chat Assistant</span>
+          <span class="settings-hint">Answers questions about your inbox and digest</span>
+        </div>
+        <select id="chatModelPicker" class="model-picker" data-key="chatModel">
+          <optgroup label="Claude CLI (no API key)">
+            <option value="claude-cli">Claude (local terminal session)</option>
+          </optgroup>
+          <optgroup label="Anthropic API (uses your key)">
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-opus-4-7">Claude Opus 4.7</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+          </optgroup>
+          <optgroup label="Groq — Llama (free)">
+            <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+            <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
+            <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+          </optgroup>
+          <optgroup label="DeepSeek">
+            <option value="deepseek-chat">DeepSeek V3</option>
+            <option value="deepseek-reasoner">DeepSeek R1 (reasoning)</option>
+          </optgroup>
+          <optgroup label="Qwen">
+            <option value="qwen-max">Qwen Max</option>
+            <option value="qwen-plus">Qwen Plus</option>
+            <option value="qwen-turbo">Qwen Turbo</option>
+          </optgroup>
+        </select>
+      </div>
+
+    </div>
+
+    <p id="modelSaveStatus" class="meta" style="margin-top:12px;color:var(--gold)"></p>
+
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-weight:700;font-size:.95rem">Train Personas</div>
+          <div class="meta" style="margin-top:2px">Give feedback on synthetic examples to sharpen each persona's behaviour</div>
+        </div>
+        <button id="openTrainerBtn" class="btn-primary">Open Trainer →</button>
+      </div>
+    </div>
+
+    <div class="tab-explainer">
+      <div class="tab-explainer-title">How Settings works</div>
+      <div class="tab-explainer-items">
+        <div class="te-item"><span class="te-icon">🧠</span><div><strong>News Researcher</strong> — reads your newsletters and clusters stories by topic before the digest is written.</div></div>
+        <div class="te-item"><span class="te-icon">✍️</span><div><strong>Reporter</strong> — turns story clusters into polished headlines and descriptions.</div></div>
+        <div class="te-item"><span class="te-icon">✂️</span><div><strong>Editor</strong> — reviews the full digest to remove duplicates and enforce section discipline.</div></div>
+        <div class="te-item"><span class="te-icon">💬</span><div><strong>Chat Assistant</strong> — powers the Chat tab. Swap to a faster/cheaper model if you chat often.</div></div>
+      </div>
+    </div>
   </section>
+
+  <!-- ─── Persona Trainer Modal ─── -->
+  <div id="trainerModal" class="trainer-modal hidden">
+    <div class="trainer-box">
+      <div class="trainer-header">
+        <div>
+          <div class="trainer-title">Train Personas</div>
+          <div class="trainer-subtitle">Generate a synthetic scenario, review what the persona does, give feedback</div>
+        </div>
+        <button id="trainerClose" class="trainer-close">✕</button>
+      </div>
+
+      <!-- Persona picker -->
+      <div class="trainer-persona-row">
+        <button class="trainer-persona-btn active" data-persona="editor">✂️ Editor</button>
+        <button class="trainer-persona-btn" data-persona="reporter">✍️ Reporter</button>
+        <button class="trainer-persona-btn" data-persona="researcher">🔍 Researcher</button>
+      </div>
+
+      <!-- Persona description -->
+      <div id="trainerPersonaDesc" class="trainer-persona-desc"></div>
+
+      <!-- Rules already learned -->
+      <div id="trainerRulesWrap" class="trainer-rules-wrap hidden">
+        <div class="trainer-rules-label">Learned rules so far</div>
+        <ul id="trainerRulesList" class="trainer-rules-list"></ul>
+      </div>
+
+      <!-- Generate button -->
+      <button id="trainerGenBtn" class="btn-primary" style="width:100%;margin:16px 0 0">Generate Scenario</button>
+
+      <!-- Scenario area -->
+      <div id="trainerScenario" class="trainer-scenario hidden">
+        <div class="trainer-split">
+          <div class="trainer-col">
+            <div class="trainer-col-label">Input (what the persona received)</div>
+            <div id="trainerInput" class="trainer-pre"></div>
+          </div>
+          <div class="trainer-col">
+            <div class="trainer-col-label">Output (what the persona did)</div>
+            <div id="trainerOutput" class="trainer-pre"></div>
+          </div>
+        </div>
+
+        <div class="trainer-feedback-wrap">
+          <label class="trainer-feedback-label">Your feedback — what should the persona do differently?</label>
+          <textarea id="trainerFeedback" class="trainer-feedback-input" rows="3" placeholder="e.g. 'The editor should have removed the Nucor story from us_business — it's not important enough. Stories should always be ranked by macro impact first.'"></textarea>
+          <div class="trainer-feedback-actions">
+            <button id="trainerApproveBtn" class="btn-primary">✓ Approve & Save</button>
+            <button id="trainerRejectBtn" class="btn-secondary">✗ Reject (regenerate)</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="trainerStatus" class="trainer-status hidden"></div>
+    </div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="app.js"></script>

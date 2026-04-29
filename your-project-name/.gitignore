@@ -10,3 +10,6 @@ digest_payload.json
 push-digest.json
 .DS_Store
 .vercel
+
+# Claude Code internal state
+.claude/
