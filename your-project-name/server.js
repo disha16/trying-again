@@ -822,7 +822,15 @@ async function runDigestSSE(req, res) {
     keys.forEach(k => { pruned[k] = history[k]; });
     await storage.setDigestHistory(pruned);
 
-    enrichAsync(); // fire-and-forget — enriches in background, updates lastRun again when done
+    // IMPORTANT: on Vercel, async work after res.end() is killed when the serverless
+    // function returns. Await enrichment inline so topic_clusters / chartOfDay /
+    // thought_leadership actually persist. vercel.json has maxDuration=300s.
+    // Note: the client may already have closed the EventSource after the first
+    // 'done' event above — that's fine; the enriched digest is still saved to
+    // Supabase digest_cache, and the UI will pick it up on the next load.
+    await enrichAsync();
+    // If the client is still listening, push the enriched payload as a distinct event.
+    try { send('enriched', await storage.getLastRun()); } catch {}
 
     console.log(`[cron/digest] Core done — ${digest.date} | ${clusters.length} clusters → digest`);
   } catch (err) {

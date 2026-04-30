@@ -623,10 +623,21 @@ $('#refreshBtn').addEventListener('click', () => {
     renderDigest(digest);
     loadChartsOfDay();
     loadDateRolodex();
-    showStatus('Digest updated!', 'success');
-    setTimeout(hideStatus, 3000);
+    showStatus('Digest updated — enriching in background…', 'success');
     btn.disabled = false;
     btn.textContent = '↻ Refresh';
+    // Keep the connection open so we can upgrade to the enriched digest when ready.
+  });
+
+  es.addEventListener('enriched', e => {
+    try {
+      const digest = JSON.parse(e.data);
+      enrichDigestWithClusters(digest);
+      renderDigest(digest);
+      loadChartsOfDay();
+      showStatus('Deep dives, chart of day, and thought leadership ready!', 'success');
+      setTimeout(hideStatus, 3000);
+    } catch (err) { console.warn('enriched handler:', err); }
     es.close();
   });
 
