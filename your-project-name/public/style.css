@@ -574,7 +574,7 @@ code {
 }
 .deck-card.deck-active { z-index: 10; cursor: grab; }
 .deck-card.deck-active:active { cursor: grabbing; }
-.deck-card-inner { position: relative; padding: 24px; min-height: 420px; display: flex; flex-direction: row; gap: 24px; box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-light); }
+.deck-card-inner { position: relative; padding: 24px; min-height: 320px; display: flex; flex-direction: row; gap: 24px; box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-light); }
 /* Portrait image on the LEFT, 1/3 of the card width, full card height. */
 .deck-image { flex: 0 0 33%; width: 33%; min-width: 160px; height: auto; align-self: stretch; max-height: none; object-fit: cover; border-radius: 14px; margin: 0; display: block; }
 /* Text column fills the rest */
@@ -583,13 +583,13 @@ code {
 /* If a card has no image, let the body span full width */
 .deck-card-inner:not(:has(.deck-image)) .deck-body { flex: 1 1 100%; }
 @media (max-width: 640px) {
-  .deck-card-inner { flex-direction: column; min-height: 380px; gap: 14px; }
+  .deck-card-inner { flex-direction: column; min-height: 300px; gap: 14px; }
   .deck-image { width: 100%; min-width: 0; flex: 0 0 auto; height: 160px; }
 }
 .deck-progress-bar { display: none; }
 .deck-progress-fill { display: none; }
 .deck-counter { font-size: .72rem; color: var(--muted); letter-spacing: .5px; }
-.deck-headline { font-size: 1.05rem; font-weight: 700; line-height: 1.4; flex: 1; color: var(--text); }
+.deck-headline { font-size: 1.05rem; font-weight: 700; line-height: 1.4; color: var(--text); }
 .deck-desc { font-size: .82rem; color: var(--muted-2); line-height: 1.5; }
 .deck-context { font-size: .78rem; color: var(--muted); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; font-style: italic; }
 .badge-web { background: rgba(99,179,237,0.12); color: #63b3ed; border-color: rgba(99,179,237,0.3); font-size: .68rem; }
