@@ -66,7 +66,7 @@
       <div id="thoughtLeadership" class="tl-block hidden">
         <div class="tl-header">
           <span class="tl-title">Thought Leadership</span>
-          <span class="tl-sub">1-min TL;DRs from your Substacks</span>
+          <span class="tl-sub">1-min TL;DRs from Substack</span>
         </div>
         <div id="tlDeck" class="tl-deck"></div>
       </div>
@@ -495,12 +495,16 @@
       </div>
     </details>
 
-    <!-- ─── Read Map (inline in Settings) ─── -->
-    <div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)">
-      <div style="font-weight:700;font-size:.95rem;margin-bottom:4px">Read Map</div>
-      <p class="meta" style="margin-bottom:12px">Stories you've read today, grouped by topic.</p>
-      <div id="readMapList" class="cluster-list"></div>
-    </div>
+    <!-- ─── Read Map (collapsible, same style as admin-only) ─── -->
+    <details id="readMapAccordion" class="admin-accordion" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none">
+        <span style="font-weight:700;font-size:.95rem">Read Map</span>
+        <span class="admin-accordion-caret meta" style="font-size:.85rem"></span>
+      </summary>
+      <div style="margin-top:16px">
+        <div id="readMapList" class="cluster-list"></div>
+      </div>
+    </details>
 
     <div class="tab-explainer">
       <div class="tab-explainer-title">How Settings works</div>

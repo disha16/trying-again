@@ -10,6 +10,7 @@ const exaImages    = require('./lib/exa-images');
 const storyEnricher     = require('./lib/story-enricher');
 const internetFallback  = require('./lib/internet-fallback');
 const topicClusters     = require('./lib/topic-clusters');
+const angles            = require('./lib/angles');
 const charts            = require('./lib/charts');
 const editor            = require('./lib/editor');
 const supa          = require('./lib/supabase');
@@ -230,6 +231,11 @@ app.post('/api/settings', async (req, res) => {
   }
   const current = await storage.getSettings();
   await storage.setSettings({ ...current, ...update });
+  // If persona quiz changed, recompact rolling preferences in the background
+  if (req.body.persona !== undefined) {
+    try { require('./lib/preferences').recompact('persona-quiz').catch(e => console.warn('[preferences] persona-quiz recompact failed:', e.message)); }
+    catch (e) { console.warn('[preferences] persona-quiz hook failed:', e.message); }
+  }
   res.json({ success: true });
 });
 
@@ -854,10 +860,13 @@ async function runDigestSSE(req, res) {
     try { readState = await supa.getClusterReadState(); } catch (e) { console.warn('[read-state]', e.message); }
 
     send('status', { message: 'Generating digest…' });
-    // Inject quality note from prior-day feedback if available
+    // Inject the rolling compacted preferences block (persona quiz + trainer rules + thumbs feedback, all merged)
+    let _preferenceText = '';
+    try { _preferenceText = await require('./lib/preferences').getPreferenceText(); } catch (_e) {}
+    // Back-compat: legacy quality note still picked up if present and preferences empty
     let _qualityNote = null;
-    try { _qualityNote = await storage.getQualityNote(); } catch (_e) {}
-    const _personaWithNote = { ...(settings.persona || {}), _qualityNote };
+    if (!_preferenceText) { try { _qualityNote = await storage.getQualityNote(); } catch (_e) {} }
+    const _personaWithNote = { ...(settings.persona || {}), _preferenceText, _qualityNote };
     const digest = await digestGen.generateDigest(clusters, digestModel, readState, customSections, _personaWithNote);
 
     send('status', { message: 'Editor reviewing for duplicates…' });
@@ -964,14 +973,33 @@ async function runDigestSSE(req, res) {
           }
         } catch (e) { console.warn('[cron/digest] earnings error:', e.message); }
 
-        // Run topic clusters and story enricher in parallel — deep dives appear ASAP
+        // Bridge: enrich top_today items with the matching cluster's excerpt + sources
+        // so angles.js can use newsletter material first and skip web search when possible.
+        try {
+          const clusterByHeadline = new Map();
+          for (const c of clusters || []) {
+            const k = (c.headline || '').toLowerCase().trim();
+            if (k) clusterByHeadline.set(k, c);
+          }
+          for (const item of (digest.top_today || [])) {
+            const k = (item.headline || '').toLowerCase().trim();
+            const c = clusterByHeadline.get(k);
+            if (!c) continue;
+            if (c.excerpt && !item.excerpt) item.excerpt = c.excerpt;
+            if (Array.isArray(c.sources) && !item.sources) item.sources = c.sources;
+          }
+        } catch (e) { console.warn('[cron/digest] excerpt bridge warn:', e.message); }
+
+        // Run NEW newsletter-first angles + story enricher in parallel — deep dives appear ASAP.
+        // angles.js prefers cluster excerpts (no web call) and only falls back to web search
+        // when source material is thin. Replaces the old topicClusters.buildTopicClusters call.
         const [clusters_result] = await Promise.all([
-          topicClusters.buildTopicClusters(digest, settings.internetFallback, digestModel)
-            .then(tc => {
-              digest.topic_clusters = tc;
+          angles.buildAnglesForTopStories(digest.top_today, settings.internetFallback, digestModel)
+            .then(({ topic_clusters }) => {
+              digest.topic_clusters = topic_clusters;
               return storage.setLastRun(digest); // save as soon as deep dives are ready
             })
-            .catch(e => console.error('[cron/digest] topic clusters error:', e.message)),
+            .catch(e => console.error('[cron/digest] angles error:', e.message)),
 
           storyEnricher.enrichTopStories(digest.top_today, digestModel)
             .catch(e => console.error('[cron/digest] story enricher error:', e.message)),
@@ -1125,6 +1153,17 @@ app.get('/api/cron/quality-check', async (req, res) => {
     // Get yesterday's date key
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const dk = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
+    // Always recompact — even with no feedback, we may need to absorb persona changes / new trainer rules.
+    const updated = await require('./lib/preferences').recompact('daily-2:30pm', { feedbackDateKey: dk });
+    return res.json({ ok: true, preferences: updated });
+  } catch (e) {
+    console.error('[quality-check] error:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+  /* ── Legacy single-shot quality note (kept for reference, never reached) ── */
+  try {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const dk = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
     const feedback = await storage.getFeedback(dk);
     if (!feedback.length) {
       return res.json({ ok: true, note: null, message: 'No feedback for yesterday' });
@@ -1191,6 +1230,9 @@ app.post('/api/train/:persona/feedback', async (req, res) => {
     // Distill rules after every 3 examples
     let rules = data.rules || [];
     if (data.examples.length % 3 === 0) rules = await trainer.distillRules(persona, model);
+    // Recompact rolling preferences whenever a trainer example is approved
+    try { require('./lib/preferences').recompact('trainer-approve').catch(e => console.warn('[preferences] trainer recompact failed:', e.message)); }
+    catch (e) { console.warn('[preferences] trainer hook failed:', e.message); }
     res.json({ saved: true, totalExamples: data.examples.length, rules });
   } catch (e) {
     console.error(`[trainer/${persona}] feedback error:`, e.message);
