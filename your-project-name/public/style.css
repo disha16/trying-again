@@ -1334,3 +1334,23 @@ html[data-theme="dark"] .nav-dark { color: var(--accent-deep); }
 .earn-meta { font-size: .72rem; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .earn-author::after, .earn-date::after { content: " ·"; opacity: .5; margin-left: 6px; }
 .earn-arrow { margin-left: auto; color: var(--accent); font-weight: 700; font-size: .95rem; }
+
+
+/* ── Suggested Thought Leaders (admin accordion) ─────────────────────── */
+.sugg-tl-list { display: flex; flex-direction: column; gap: 8px; }
+.sugg-tl-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border-light); border-radius: 10px; background: var(--surface);
+}
+.sugg-tl-text { min-width: 0; flex: 1; }
+.sugg-tl-name { font-weight: 600; font-size: .88rem; color: var(--text); }
+.sugg-tl-desc { font-size: .76rem; color: var(--muted); margin-top: 2px; }
+.sugg-tl-email { font-family: ui-monospace, SFMono-Regular, monospace; opacity: .85; }
+.sugg-tl-add {
+  background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+  padding: 6px 14px; font-size: .78rem; font-weight: 600; cursor: pointer;
+  flex: 0 0 auto; transition: background .15s, opacity .15s;
+}
+.sugg-tl-add:hover:not(:disabled) { background: var(--accent-deep, var(--accent)); }
+.sugg-tl-add:disabled { opacity: .6; cursor: default; }
+.sugg-tl-add.is-added { background: transparent; color: var(--accent); border: 1px solid var(--accent-border); }

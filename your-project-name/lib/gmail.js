@@ -251,14 +251,59 @@ async function fetchThoughtLeadership({ days = 7 } = {}) {
 
   const endSec   = Math.floor(Date.now() / 1000);
   const startSec = endSec - days * 24 * 60 * 60;
-  // Gmail supports OR-ing from: filters. Use email addresses verbatim.
-  const fromClause = tlSources.map(s => `from:${s.email}`).join(' OR ');
-  const q = `(${fromClause}) after:${startSec} before:${endSec}`;
-  console.log(`[gmail-tl] window ${days}d, ${tlSources.length} sources, query: ${q.slice(0,120)}`);
+
+  // Build a UNION query that catches three delivery patterns:
+  //   a) direct sends from the TL email address (`from:email@stratechery.com`)
+  //   b) forwarded copies where the outer From is the user, but the body / subject
+  //      mentions the TL sender (`subject:FW <name>` OR `"<email>"`).
+  //   c) the sender's domain (in case email field stored is generic).
+  const orParts = [];
+  for (const s of tlSources) {
+    if (s.email) {
+      orParts.push(`from:${s.email}`);
+      orParts.push(`"${s.email}"`);              // body / forward header reference
+      const dom = s.email.split('@')[1];
+      if (dom) orParts.push(`from:${dom}`);
+    }
+    if (s.name) {
+      orParts.push(`subject:"FW ${s.name}"`);
+      orParts.push(`subject:"Fwd ${s.name}"`);
+      orParts.push(`subject:"${s.name}"`);
+    }
+  }
+  const fromClause = orParts.join(' OR ');
+  const q = `in:inbox (${fromClause}) after:${startSec} before:${endSec}`;
+  console.log(`[gmail-tl] window ${days}d, ${tlSources.length} sources, query: ${q.slice(0,160)}`);
 
   const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults: 50 });
   const messages = listRes.data.messages ?? [];
-  if (!messages.length) return [];
+  if (!messages.length) {
+    console.log('[gmail-tl] zero messages matched — check that TL sender email/name actually appears on inbox messages');
+    return [];
+  }
+
+  // Helper that resolves a source kind from headers + body, including the
+  // forwarded-email recovery path used by fetchNewsletterHeadlines.
+  const resolveTL = (from, subject, bodyText) => {
+    let meta = getSource(from, sources);
+    if (meta.kind !== 'thought_leadership') {
+      const isForward = /^(fw|fwd):/i.test(subject.trim());
+      if (isForward) {
+        const fwFrom = bodyText.match(/^From:\s*(.+)/m)?.[1] ?? '';
+        if (fwFrom) meta = getSource(fwFrom, sources);
+      }
+    }
+    if (meta.kind !== 'thought_leadership') {
+      // Final fallback: substring match the TL source email or name in body+subject.
+      const hay = (subject + '\n' + bodyText).toLowerCase();
+      for (const s of tlSources) {
+        const emailHit = s.email && hay.includes(s.email.toLowerCase());
+        const nameHit  = s.name  && hay.includes(s.name.toLowerCase());
+        if (emailHit || nameHit) { meta = { name: s.name, kind: 'thought_leadership' }; break; }
+      }
+    }
+    return meta;
+  };
 
   const results = [];
   await Promise.all(messages.map(async ({ id }) => {
@@ -274,7 +319,7 @@ async function fetchThoughtLeadership({ days = 7 } = {}) {
       const from = get('from');
       const subject = get('subject');
       const bodyText = extractBodyText(msg);
-      const meta = getSource(from, sources);
+      const meta = resolveTL(from, subject, bodyText);
       if (meta.kind !== 'thought_leadership') return;
       const imageUrls = extractImageUrls(msg);
       const internalDate = msg.internalDate ? Number(msg.internalDate) : Date.now();

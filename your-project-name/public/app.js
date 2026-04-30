@@ -764,6 +764,63 @@ $('#useExaToggle')?.addEventListener('change', async e => {
   });
   showSaveStatus(on ? 'Exa on — next refresh will fetch images & richer web context' : 'Exa off — no card images, no Exa credits used');
 });
+
+// ── Suggested Thought Leaders (admin-only accordion) ─────────────────────
+async function loadSuggestedTL() {
+  const wrap = $('#suggTlList');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="settings-hint">Loading…</div>';
+  try {
+    const list = await fetch('/api/suggested-tl').then(r => r.json());
+    if (!Array.isArray(list) || !list.length) { wrap.innerHTML = '<div class="settings-hint">None.</div>'; return; }
+    wrap.innerHTML = list.map(s => `
+      <div class="sugg-tl-item" data-name="${esc(s.name)}">
+        <div class="sugg-tl-text">
+          <div class="sugg-tl-name">${esc(s.name)}</div>
+          <div class="sugg-tl-desc">${esc(s.desc || '')} · <span class="sugg-tl-email">${esc(s.email || '')}</span></div>
+        </div>
+        <button class="sugg-tl-add ${s.alreadyAdded ? 'is-added' : ''}" data-name="${esc(s.name)}" type="button">${s.alreadyAdded ? 'Added' : 'Add'}</button>
+      </div>`).join('');
+    wrap.querySelectorAll('.sugg-tl-add').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.name;
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          const r = await fetch('/api/suggested-tl/add', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ name }),
+          }).then(x => x.json());
+          if (r.ok) { btn.textContent = 'Added'; btn.classList.add('is-added'); }
+          else      { btn.textContent = 'Failed'; btn.disabled = false; }
+        } catch { btn.textContent = 'Failed'; btn.disabled = false; }
+      });
+    });
+  } catch (e) {
+    wrap.innerHTML = `<div class="settings-hint">Couldn’t load suggestions.</div>`;
+  }
+}
+
+$('#suggTlAddAll')?.addEventListener('click', async () => {
+  const btn = $('#suggTlAddAll');
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Adding…';
+  try {
+    const r = await fetch('/api/suggested-tl/add-all', { method: 'POST' }).then(x => x.json());
+    if (r.ok) {
+      btn.textContent = `Added ${r.added || 0} · updated ${r.updated || 0}`;
+      await loadSuggestedTL();
+    } else { btn.textContent = 'Failed'; }
+  } catch { btn.textContent = 'Failed'; }
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2500);
+});
+
+// Lazy-load the suggestion list the first time the admin accordion opens.
+(function watchAdminAccordion() {
+  const acc = document.getElementById('adminSettingsAccordion');
+  if (!acc) return;
+  acc.addEventListener('toggle', () => { if (acc.open) loadSuggestedTL(); });
+  if (acc.open) loadSuggestedTL();
+})();
 $('#tzSelect')?.addEventListener('change', async e => {
   window.setUserTz(e.target.value);
   await fetch('/api/settings', {

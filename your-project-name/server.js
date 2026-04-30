@@ -30,6 +30,89 @@ app.get('/sources', async (req, res) => {
   res.json(await storage.getSources());
 });
 
+// Curated list of well-known Thought Leadership newsletters surfaced in the
+// admin-only Settings accordion. Returns the static catalog plus a flag for
+// whether the user already has each one.
+app.get('/api/suggested-tl', async (_req, res) => {
+  try {
+    const { SUGGESTED_TL } = require('./lib/suggested-tl');
+    const sources = await storage.getSources();
+    const existing = new Set(
+      sources.map(s => (s.name || '').toLowerCase().trim()).filter(Boolean)
+    );
+    res.json(SUGGESTED_TL.map(s => ({ ...s, alreadyAdded: existing.has(s.name.toLowerCase().trim()) })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// One-click add: subscribes the named entry from the curated TL catalog and
+// tags it kind=thought_leadership so the TL pipeline picks it up.
+app.post('/api/suggested-tl/add', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const { SUGGESTED_TL } = require('./lib/suggested-tl');
+    const tpl = SUGGESTED_TL.find(s => s.name.toLowerCase() === String(name).toLowerCase());
+    if (!tpl) return res.status(404).json({ error: 'not in suggested list' });
+    const sources = await storage.getSources();
+    const existing = sources.find(s => (s.name || '').toLowerCase().trim() === tpl.name.toLowerCase());
+    if (existing) {
+      // Already there — just upgrade its kind to thought_leadership and ensure enabled.
+      existing.kind    = 'thought_leadership';
+      existing.enabled = true;
+      if (!existing.email && tpl.email) existing.email = tpl.email;
+      if (!existing.url   && tpl.url)   existing.url   = tpl.url;
+      await storage.setSources(sources);
+      return res.json({ ok: true, source: existing, action: 'updated' });
+    }
+    const src = {
+      id:      Date.now(),
+      name:    tpl.name,
+      email:   tpl.email || '',
+      url:     tpl.url   || '',
+      kind:    'thought_leadership',
+      enabled: true,
+    };
+    sources.push(src);
+    await storage.setSources(sources);
+    res.json({ ok: true, source: src, action: 'added' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk add all suggestions the user doesn't already have.
+app.post('/api/suggested-tl/add-all', async (_req, res) => {
+  try {
+    const { SUGGESTED_TL } = require('./lib/suggested-tl');
+    const sources = await storage.getSources();
+    const existing = new Map(
+      sources.map(s => [(s.name || '').toLowerCase().trim(), s])
+    );
+    let added = 0, updated = 0;
+    for (const tpl of SUGGESTED_TL) {
+      const key = tpl.name.toLowerCase().trim();
+      const cur = existing.get(key);
+      if (cur) {
+        if (cur.kind !== 'thought_leadership' || !cur.enabled) {
+          cur.kind    = 'thought_leadership';
+          cur.enabled = true;
+          updated++;
+        }
+      } else {
+        sources.push({
+          id:      Date.now() + added,
+          name:    tpl.name,
+          email:   tpl.email || '',
+          url:     tpl.url   || '',
+          kind:    'thought_leadership',
+          enabled: true,
+        });
+        added++;
+      }
+    }
+    await storage.setSources(sources);
+    res.json({ ok: true, added, updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/sources', async (req, res) => {
   const { name, email, url, kind } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
