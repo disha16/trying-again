@@ -46,7 +46,7 @@ async function callAnthropic(model, system, userPrompt) {
   const client = new Anthropic({ apiKey });
   const resp = await client.messages.create({
     model,
-    max_tokens: 6000,
+    max_tokens: 16000,
     system,
     messages: [{ role: 'user', content: userPrompt }],
   });
@@ -237,7 +237,31 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('Model did not return valid JSON');
 
-  const digest = JSON.parse(match[0]);
+  let digest;
+  try {
+    digest = JSON.parse(match[0]);
+  } catch (e) {
+    // Attempt to repair truncated JSON by trimming to last complete object
+    let raw = match[0];
+    const lastComma = raw.lastIndexOf('},');
+    if (lastComma > 0) {
+      raw = raw.substring(0, lastComma + 1);
+      // Re-close open arrays and object
+      let opens = 0, openBraces = 0;
+      for (const ch of raw) {
+        if (ch === '[') opens++; else if (ch === ']') opens--;
+        if (ch === '{') openBraces++; else if (ch === '}') openBraces--;
+      }
+      while (opens > 0) { raw += ']'; opens--; }
+      while (openBraces > 0) { raw += '}'; openBraces--; }
+    }
+    try {
+      digest = JSON.parse(raw);
+      console.log('[digest] Repaired truncated JSON successfully');
+    } catch (e2) {
+      throw new Error('Model returned invalid JSON: ' + e.message);
+    }
+  }
   if (!digest.date || !Array.isArray(digest.top_today)) throw new Error('Digest JSON missing required fields');
 
   // Match clusters to digest items by headline (digest uses cluster headlines as-is)
