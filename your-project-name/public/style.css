@@ -573,7 +573,7 @@ code {
 }
 .deck-card.deck-active { z-index: 10; cursor: grab; }
 .deck-card.deck-active:active { cursor: grabbing; }
-.deck-card-inner { padding: 24px; height: auto; display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-light); }
+.deck-card-inner { position: relative; padding: 24px; height: auto; display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-light); }
 .deck-image { width: calc(100% + 48px); margin: -24px -24px 0; max-height: 160px; object-fit: cover; border-radius: var(--radius) var(--radius) 0 0; display: block; }
 .deck-progress-bar { display: none; }
 .deck-progress-fill { display: none; }
@@ -1011,7 +1011,6 @@ html.hide-images #chartsOfDay { display: none !important; }
   border-color: var(--border);
   background: var(--surface-2);
 }
-.deck-card { position: relative; }
 
 .admin-chip {
   display: inline-block;
