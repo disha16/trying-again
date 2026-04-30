@@ -188,8 +188,14 @@ function buildSystemPrompt(customSections = [], persona = null, model = null) {
     ? '\n' + customSections.map(s => `  "${s.id}": [ ...up to 10 ${s.label} stories... ],`).join('\n')
     : '';
   const customRules = customSections.length
-    ? '\nCustom sections — populate only if relevant content exists:\n' +
-      customSections.map(s => `- ${s.id}: stories specifically about ${s.label}`).join('\n')
+    ? '\nCUSTOM SECTIONS — STRICT FILTERING (READ CAREFULLY):\n' +
+      customSections.map(s => {
+        const desc = (s.description || '').trim();
+        const def = desc
+          ? `Scope: ${desc}`
+          : `Scope: stories whose PRIMARY subject is "${s.label}" (the topic itself, not tangentially related).`;
+        return `- ${s.id} ("${s.label}")\n  ${def}\n  RULES for ${s.id}:\n    (a) Only include a cluster if its primary subject CLEARLY matches the scope above.\n    (b) Return an EMPTY array \`[]\` when no clusters truly fit — it is BETTER to return [] than to fill with leftover stories.\n    (c) NEVER pad this section with tech, business, or politics stories that don't match the scope.\n    (d) A passing mention of "${s.label}" is NOT enough — the cluster must be primarily about it.`;
+      }).join('\n')
     : '';
   const base = model ? _systemBase(model) : SYSTEM_BASE;
 

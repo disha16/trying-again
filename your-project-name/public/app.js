@@ -1631,11 +1631,21 @@ $$('#personaQuestions .pq-btn').forEach(btn => {
 function renderPersonaSections() {
   const list = $('#personaSectionList');
   if (!list) return;
-  list.innerHTML = personaSections.map((s, i) => `
+  list.innerHTML = personaSections.map((s, i) => {
+    const desc = (s.description || '').trim();
+    const descHtml = s.custom
+      ? (desc
+          ? `<span class="ps-desc">${esc(desc)}</span>`
+          : `<span class="ps-desc ps-desc-empty">No description — click ✏️ to add one for sharper filtering</span>`)
+      : '';
+    return `
     <li class="persona-section-item ${s.enabled === false ? 'ps-disabled' : ''}">
-      <span class="persona-section-name">${esc(s.label)}${!s.custom ? ' <span class="ps-default-tag">default</span>' : ''}</span>
+      <div class="persona-section-info">
+        <span class="persona-section-name">${esc(s.label)}${!s.custom ? ' <span class="ps-default-tag">default</span>' : ''}</span>
+        ${descHtml}
+      </div>
       <div class="persona-section-actions">
-        ${s.custom ? `<button class="ps-btn ps-edit" data-i="${i}" title="Rename">✏️</button>` : ''}
+        ${s.custom ? `<button class="ps-btn ps-edit" data-i="${i}" title="Edit name & description">✏️</button>` : ''}
         ${s.custom
           ? `<button class="ps-btn ps-del" data-i="${i}" title="Remove">✕</button>`
           : `<label class="toggle" title="${s.enabled === false ? 'Enable' : 'Disable'} section">
@@ -1644,7 +1654,8 @@ function renderPersonaSections() {
              </label>`
         }
       </div>
-    </li>`).join('');
+    </li>`;
+  }).join('');
 
   list.querySelectorAll('.ps-del').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1657,12 +1668,17 @@ function renderPersonaSections() {
   list.querySelectorAll('.ps-edit').forEach(btn => {
     btn.addEventListener('click', () => {
       const i    = +btn.dataset.i;
-      const name = prompt('Rename section:', personaSections[i].label);
-      if (name?.trim()) {
-        personaSections[i].label = name.trim();
-        renderPersonaSections();
-        savePersona();
-      }
+      const name = prompt('Section name:', personaSections[i].label);
+      if (!name?.trim()) return;
+      const currentDesc = personaSections[i].description || '';
+      const desc = prompt(
+        `Describe what should appear in "${name.trim()}".\n\nExample: "TV shows, films, music, celebrity, gaming, sports — NOT tech, NOT business".\n\nA sharper description gives sharper results. Leave blank to use the section name as the only filter.`,
+        currentDesc
+      );
+      personaSections[i].label = name.trim();
+      if (desc !== null) personaSections[i].description = desc.trim();
+      renderPersonaSections();
+      savePersona();
     });
   });
 
@@ -1680,8 +1696,14 @@ $('#addSectionBtn')?.addEventListener('click', async () => {
   const input = $('#newSectionInput');
   const label = input?.value.trim();
   if (!label) return;
+  const description = prompt(
+    `Describe what should appear in "${label}".\n\nExample: "TV shows, films, music, celebrity, gaming, sports — NOT tech, NOT business".\n\nA sharper description gives sharper results. Leave blank to use the section name as the only filter.`,
+    ''
+  );
   const id = 'custom_' + Date.now();
-  personaSections.push({ id, label, custom: true });
+  const section = { id, label, custom: true };
+  if (description?.trim()) section.description = description.trim();
+  personaSections.push(section);
   input.value = '';
   renderPersonaSections();
   await savePersona();
