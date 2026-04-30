@@ -199,25 +199,22 @@ async function fetchChartOfDay() {
  * and why it matters. Uses {title, context} as input. Idempotent (skips charts
  * that already have `caption`).
  */
-async function summarizeCharts(charts, { model = 'gpt-4.1-mini' } = {}) {
+async function summarizeCharts(charts, { model } = {}) {
   if (!Array.isArray(charts) || !charts.length) return charts || [];
-  let OpenAI;
-  try { OpenAI = require('openai').OpenAI; }
-  catch { console.warn('[chart] openai SDK not installed; skipping captions'); return charts; }
-  if (!process.env.OPENAI_API_KEY) return charts;
-  const client = new OpenAI();
+  let _callModel;
+  try { ({ _callModel } = require('./digest-generator')); }
+  catch (e) { console.warn('[chart] digest-generator not available, captions skipped:', e.message); return charts; }
+  // Pick a fast model that works on Vercel. Default chain: groq llama → deepseek → qwen.
+  // Caller can override with `model`. We let _callModel handle provider fallback.
+  const tryModel = model || process.env.CHART_CAPTION_MODEL || 'llama-3.3-70b-versatile';
   const out = [];
   for (const c of charts) {
     if (c.caption) { out.push(c); continue; }
     try {
-      const prompt = `Write exactly 2 short sentences (max ~28 words total) that explain what this chart shows AND why it matters for an investor. No preamble, no markdown, no quotes.\n\nTitle: ${c.title}\nContext: ${c.context || ''}`;
-      const r = await client.chat.completions.create({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 120,
-        temperature: 0.4,
-      });
-      const caption = (r.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+      const sys    = 'You are a concise financial-chart caption writer. Output exactly 2 short sentences (max ~28 words total). No preamble, no markdown, no quotes.';
+      const prompt = `Explain what this chart shows AND why it matters for an investor.\n\nTitle: ${c.title}\nContext: ${c.context || ''}`;
+      const text   = await _callModel(tryModel, prompt, sys);
+      const caption = String(text || '').trim().replace(/^["']|["']$/g, '').replace(/\s+/g, ' ');
       out.push({ ...c, caption });
     } catch (e) {
       console.warn(`[chart] caption failed for ${c.source}: ${e.message}`);

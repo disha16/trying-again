@@ -117,23 +117,47 @@ async function withRetry(fn, retries = 3) {
   }
 }
 
-const SYSTEM_BASE = `You are a senior news editor. You receive a list of deduplicated news story clusters (each with headline, sources, and keywords) and produce a structured JSON daily digest.
+function _isClaude(model) {
+  const m = String(model || '').toLowerCase();
+  return m.startsWith('claude') || m.startsWith('anthropic') || m.includes('sonnet') || m.includes('opus') || m.includes('haiku');
+}
 
-Each item: { "headline": "...", "description": "...", "source": "<comma-separated sources>", "keywords": ["topic1", "topic2"] }
-
-CRITICAL RULES:
-- Use EVERY cluster you are given. Do not drop clusters because they don't match your taste — every cluster must appear in EXACTLY ONE section.
-- Use the cluster's headline as-is (they are already factual and non-editorial)
-- description: 2-4 complete sentences, 120-320 chars total. Sentence 1: what happened and who. Sentence 2: why it matters or the key number/outcome. Sentences 3-4 (optional): what to watch next and any relevant context. End every sentence with proper punctuation — NEVER leave a thought trailing or unfinished. Neutral tone — no hype, no editorial opinion.
-- source field: list all sources from the cluster, comma-separated
-- Headlines under 120 chars
-
-SECTION RULES:
+// Strict no-repeat rule (Claude only): every cluster appears in exactly one section.
+const SECTION_RULES_STRICT = `SECTION RULES:
 - STRICT NO REPEATS: every cluster appears in exactly ONE section.
 - top_today is the most important section. Place the 10 most important stories here. If a story belongs in top_today, it does NOT also appear in its category section.
 - Each remaining cluster (not in top_today) goes into the single best-fit category section.
 - us_business: US-headquartered company news, US domestic economy. global_economies: non-US countries, international trade, foreign central banks, emerging markets.
 - everything_else: catches anything that doesn't fit a named category — DO NOT drop clusters from the digest.`;
+
+// Relaxed rule for non-Claude models (Qwen, GPT-mini, etc.): allow top_today
+// stories to ALSO appear in their category tab, so non-top tabs aren't empty
+// when there are fewer than 10 strong clusters.
+const SECTION_RULES_RELAXED = `SECTION RULES:
+- top_today: the 10 most important stories of the day, one per major topic, no topic repeated WITHIN top_today.
+- EVERY cluster MUST also appear in its single best-fit CATEGORY section (tech / us_business / india_business / global_economies / politics / everything_else). This applies even to clusters already in top_today — they MUST be duplicated into their category. The only section that obeys uniqueness is top_today itself.
+- us_business: US-headquartered company news, US domestic economy. global_economies: non-US countries, international trade, foreign central banks, emerging markets.
+- everything_else: catches anything that doesn't fit a named category — DO NOT drop clusters from the digest.
+- Each cluster appears AT MOST ONCE per category section (no within-category duplicates), but it MAY appear in both top_today AND its category section.`;
+
+function _systemBase(model) {
+  const rules = _isClaude(model) ? SECTION_RULES_STRICT : SECTION_RULES_RELAXED;
+  return `You are a senior news editor. You receive a list of deduplicated news story clusters (each with headline, sources, and keywords) and produce a structured JSON daily digest.
+
+Each item: { "headline": "...", "description": "...", "source": "<comma-separated sources>", "keywords": ["topic1", "topic2"] }
+
+CRITICAL RULES:
+- Use EVERY cluster you are given. Do not drop clusters because they don't match your taste — every cluster must appear in the digest (see SECTION RULES below for placement).
+- Use the cluster's headline as-is (they are already factual and non-editorial)
+- description: 2-4 complete sentences, 120-320 chars total. Sentence 1: what happened and who. Sentence 2: why it matters or the key number/outcome. Sentences 3-4 (optional): what to watch next and any relevant context. End every sentence with proper punctuation — NEVER leave a thought trailing or unfinished. Neutral tone — no hype, no editorial opinion.
+- source field: list all sources from the cluster, comma-separated
+- Headlines under 120 chars
+
+${rules}`;
+}
+// Backwards compat: SYSTEM_BASE used by static SYSTEM constant. Defaults to strict
+// (Claude rule) since it's only used when no model-specific prompt is built.
+const SYSTEM_BASE = _systemBase('claude-default');
 
 function personaInstructions(persona) {
   if (!persona || typeof persona !== 'object') return '';
@@ -159,7 +183,7 @@ function personaInstructions(persona) {
   return `\nReader-preference layer (use these to break ties and shape DESCRIPTIONS, never to drop clusters):\n${lines.join('\n')}`;
 }
 
-function buildSystemPrompt(customSections = [], persona = null) {
+function buildSystemPrompt(customSections = [], persona = null, model = null) {
   const customJson = customSections.length
     ? '\n' + customSections.map(s => `  "${s.id}": [ ...up to 10 ${s.label} stories... ],`).join('\n')
     : '';
@@ -167,8 +191,9 @@ function buildSystemPrompt(customSections = [], persona = null) {
     ? '\nCustom sections — populate only if relevant content exists:\n' +
       customSections.map(s => `- ${s.id}: stories specifically about ${s.label}`).join('\n')
     : '';
+  const base = model ? _systemBase(model) : SYSTEM_BASE;
 
-  return `${SYSTEM_BASE}${personaInstructions(persona)}${customRules}
+  return `${base}${personaInstructions(persona)}${customRules}
 
 Return ONLY a valid JSON object — no markdown, no extra text:
 {
@@ -284,7 +309,8 @@ async function _callModel(model, prompt, systemOverride) {
 async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readState = {}, customSections = [], persona = null) {
   if (!clusters.length) throw new Error('No story clusters to summarise');
 
-  const sys = (customSections.length || persona) ? buildSystemPrompt(customSections, persona) : SYSTEM;
+  // Always rebuild prompt so the section-rule branch follows the chosen model.
+  const sys = buildSystemPrompt(customSections, persona, model);
 
   const clusterText = clusters.map((c, i) => {
     const readInCluster = (c.keywords || [])
