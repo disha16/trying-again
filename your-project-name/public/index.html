@@ -413,16 +413,6 @@
     <p id="modelSaveStatus" class="meta" style="margin-top:12px;color:var(--gold)"></p>
 
     <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
-      <div class="model-group-label" style="margin-bottom:12px">Display</div>
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <span class="settings-label">Use Exa web search <span class="admin-chip">for admin use only</span></span>
-          <span class="settings-hint">When on, Exa is used for deep-dive angles, story enrichment, card images, similar notes, and chat web context. When off (default), the app falls back to Tavily/Brave (if configured) and finally the LLM — no card images, no Exa credits burned.</span>
-        </div>
-        <label class="toggle"><input type="checkbox" id="useExaToggle" /><span class="slider"></span></label>
-      </div>
-    </div>
-    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
       <div class="settings-row">
         <div class="settings-row-info">
           <span class="settings-label">Timezone</span>
@@ -469,6 +459,23 @@
         <button id="openTrainerBtn" class="btn-primary">Open Trainer →</button>
       </div>
     </div>
+
+    <!-- ─── Admin-only settings (collapsible) ──────────────────────────────── -->
+    <details id="adminSettingsAccordion" class="admin-accordion" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none">
+        <span style="font-weight:700;font-size:.95rem">Admin-only settings</span>
+        <span class="admin-accordion-caret meta" style="font-size:.85rem"></span>
+      </summary>
+      <div style="margin-top:16px">
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <span class="settings-label">Use Exa web search</span>
+            <span class="settings-hint">When on, Exa powers deep-dive angles, card images, story enrichment, similar notes, and chat web context. When off (default), the app falls back to Tavily/Brave (if configured) — card images and deep dives still work, but Exa credits are never used.</span>
+          </div>
+          <label class="toggle"><input type="checkbox" id="useExaToggle" /><span class="slider"></span></label>
+        </div>
+      </div>
+    </details>
 
     <!-- ─── Read Map (inline in Settings) ─── -->
     <div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)">

@@ -2088,11 +2088,6 @@ document.addEventListener('DOMContentLoaded', () => {
       body: 'Save observations, recurring themes, or questions. I surface related notes when a similar story shows up later.',
     },
     {
-      emoji: '📬',
-      title: '<em>Sources</em> — managed by forwarding',
-      body: `Add sources here. You can't import them automatically — forward newsletters to Gmail first, then register the sender address here. <em>(Oops — no magic add button.)</em>`,
-    },
-    {
       emoji: '🎭',
       title: '<em>Persona</em>',
       body: `Tune voice, length, and section priorities. I'll re-read your preferences before every run.`,

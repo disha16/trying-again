@@ -579,7 +579,7 @@ code {
 .deck-image { flex: 0 0 33%; width: 33%; min-width: 160px; height: auto; align-self: stretch; max-height: none; object-fit: cover; border-radius: 14px; margin: 0; display: block; }
 /* Text column fills the rest */
 .deck-card-inner > :not(.deck-image):not(.deck-feedback-top) { /* nothing */ }
-.deck-card-inner .deck-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.deck-card-inner .deck-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-width: 0; justify-content: flex-start; }
 /* If a card has no image, let the body span full width */
 .deck-card-inner:not(:has(.deck-image)) .deck-body { flex: 1 1 100%; }
 @media (max-width: 640px) {
@@ -593,7 +593,7 @@ code {
 .deck-desc { font-size: .82rem; color: var(--muted-2); line-height: 1.5; }
 .deck-context { font-size: .78rem; color: var(--muted); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; font-style: italic; }
 .badge-web { background: rgba(99,179,237,0.12); color: #63b3ed; border-color: rgba(99,179,237,0.3); font-size: .68rem; }
-.deck-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; }
+.deck-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
 .deck-actions { display: flex; gap: 8px; }
 .deck-btn { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 50%; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .15s; }
 .deck-btn:hover { background: var(--accent); color: #fff; }
@@ -1276,3 +1276,10 @@ html[data-theme="dark"] .deck-sig {
   transform: translateY(-1px);
 }
 html[data-theme="dark"] .nav-dark { color: var(--accent-deep); }
+
+
+/* Admin-only accordion (Settings tab) */
+.admin-accordion > summary::-webkit-details-marker { display: none; }
+.admin-accordion > summary { outline: none; }
+.admin-accordion > summary .admin-accordion-caret::before { content: '▸ Show'; opacity: .7; }
+.admin-accordion[open] > summary .admin-accordion-caret::before { content: '▾ Hide'; }

@@ -375,6 +375,8 @@ app.post('/api/notes/:id/summary', async (req, res) => {
     let summary;
     if (chatModel === 'claude-cli') {
       summary = await digestGen.callClaudeCLI('You are a sharp analyst.', prompt);
+    } else if (digestGen.ANTHROPIC_MODELS.includes(chatModel)) {
+      summary = await digestGen.callAnthropic(chatModel, 'You are a sharp analyst.', prompt);
     } else {
       const client = digestGen.getClient(chatModel);
       const r = await client.chat.completions.create({ model: chatModel, max_tokens: 200, messages: [{ role: 'user', content: prompt }] });
@@ -559,6 +561,13 @@ ${digestContext}${inboxContext}${webContext}`;
     if (chatModel === 'claude-cli') {
       const lastUserMsg = chatMessages.filter(m => m.role === 'user').at(-1)?.content ?? '';
       reply = await digestGen.callClaudeCLI(CHAT_SYSTEM, lastUserMsg);
+    } else if (digestGen.ANTHROPIC_MODELS.includes(chatModel)) {
+      // Anthropic SDK uses a different shape — collapse the multi-turn chat into
+      // a single user turn that preserves conversational context.
+      const convo = chatMessages
+        .map(m => `${(m.role || 'user').toUpperCase()}: ${m.content}`)
+        .join('\n\n');
+      reply = await digestGen.callAnthropic(chatModel, CHAT_SYSTEM, convo);
     } else {
       const client   = digestGen.getClient(chatModel);
       const response = await client.chat.completions.create({
