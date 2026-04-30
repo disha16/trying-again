@@ -304,6 +304,10 @@ app.get('/api/chart-of-day', async (req, res) => {
     }
     chartInFlight = chartOfDay.getCharts({ dateKey }).finally(() => { chartInFlight = null; });
     const payload = await chartInFlight;
+    // Add 2-line LLM caption to each chart on the fly if missing.
+    if (Array.isArray(payload?.charts) && payload.charts.some(c => !c.caption)) {
+      try { payload.charts = await chartOfDay.summarizeCharts(payload.charts); } catch {}
+    }
     res.json(payload);
   } catch (e) {
     console.error('[chart-of-day]', e.message);
@@ -946,8 +950,9 @@ async function runDigestSSE(req, res) {
         if (true) {
           try {
             const payload = await chartOfDay.getCharts({ dateKey, force: true });
+            try { payload.charts = await chartOfDay.summarizeCharts(payload.charts); } catch (e) { console.warn('[cron/digest] chart caption error:', e.message); }
             digest.chartOfDay = payload;
-            console.log(`[cron/digest] chart-of-day v2 cached for ${dateKey} (${payload.charts.length} charts)`);
+            console.log(`[cron/digest] chart-of-day v2 cached for ${dateKey} (${payload.charts.length} charts, captioned)`);
           } catch (e) { console.error('[cron/digest] chart-of-day v2 prefetch error:', e.message); }
         } else {
           console.log('[cron/digest] chart-of-day prefetch skipped');

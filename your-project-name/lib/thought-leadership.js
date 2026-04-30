@@ -168,7 +168,9 @@ async function summariseOne(entry, model) {
     source:           entry.source,
     title:            parsed.title || subject || 'Untitled',
     tldr:             parsed.tldr || '',
-    keyPoints:        Array.isArray(parsed.key_points) ? parsed.key_points.slice(0, 3) : [],
+    keyPoints:        Array.isArray(parsed.key_points)
+                       ? parsed.key_points.slice(0, 3).map(p => String(p).replace(/\s*\.\s*$/, '').trim())
+                       : [],
     readingMinutes:   parsed.reading_minutes || 1,
   };
 }
@@ -274,7 +276,9 @@ Rules:
       source:         p.source_label || 'Today\u2019s headlines',
       title:          p.title || 'Untitled',
       tldr:           p.tldr || '',
-      keyPoints:      Array.isArray(p.key_points) ? p.key_points.slice(0, 3) : [],
+      keyPoints:      Array.isArray(p.key_points)
+                       ? p.key_points.slice(0, 3).map(s => String(s).replace(/\s*\.\s*$/, '').trim())
+                       : [],
       readingMinutes: p.reading_minutes || 1,
       image:          require('./undraw').pick(imgKey),
       isLLMFallback:  true,

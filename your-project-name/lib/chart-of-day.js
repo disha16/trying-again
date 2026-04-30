@@ -194,4 +194,37 @@ async function fetchChartOfDay() {
   return charts[0] || null;
 }
 
-module.exports = { getCharts, fetchCharts, fetchChartOfDay, getChartSources, DEFAULT_SOURCES };
+/**
+ * Enrich each chart with a 2-line LLM caption summarising what the chart shows
+ * and why it matters. Uses {title, context} as input. Idempotent (skips charts
+ * that already have `caption`).
+ */
+async function summarizeCharts(charts, { model = 'gpt-4.1-mini' } = {}) {
+  if (!Array.isArray(charts) || !charts.length) return charts || [];
+  let OpenAI;
+  try { OpenAI = require('openai').OpenAI; }
+  catch { console.warn('[chart] openai SDK not installed; skipping captions'); return charts; }
+  if (!process.env.OPENAI_API_KEY) return charts;
+  const client = new OpenAI();
+  const out = [];
+  for (const c of charts) {
+    if (c.caption) { out.push(c); continue; }
+    try {
+      const prompt = `Write exactly 2 short sentences (max ~28 words total) that explain what this chart shows AND why it matters for an investor. No preamble, no markdown, no quotes.\n\nTitle: ${c.title}\nContext: ${c.context || ''}`;
+      const r = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 120,
+        temperature: 0.4,
+      });
+      const caption = (r.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+      out.push({ ...c, caption });
+    } catch (e) {
+      console.warn(`[chart] caption failed for ${c.source}: ${e.message}`);
+      out.push(c);
+    }
+  }
+  return out;
+}
+
+module.exports = { getCharts, fetchCharts, fetchChartOfDay, getChartSources, summarizeCharts, DEFAULT_SOURCES };
