@@ -107,7 +107,7 @@ function renderDigest(data) {
   if (data.ranAt) {
     try { date = fmtDT(data.ranAt, { month: 'long', day: 'numeric', year: 'numeric' }); } catch {}
   }
-  $('#digestTitle').innerHTML = `<em>today's digest</em> <span class="digest-date-label">— ${date}</span>`;
+  $('#digestTitle').innerHTML = `<em>today's digest</em>`;
   const ran = data.ranAt ? fmtDT(data.ranAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   $('#digestMeta').textContent = ran ? `Last updated: ${ran} ${tzAbbr()}` : '';
 
