@@ -630,9 +630,13 @@ function renderMiniDeck(clusterId) {
   const stack = items.slice(index, index + 3).map((item, offset) => {
     const isActive = offset === 0;
     const srcName = prettifySource(item.source);
-    const badge = item.sourceUrl
-      ? `<a class="badge badge-link" href="${esc(item.sourceUrl)}" target="_blank" rel="noopener">${esc(srcName)}</a>`
-      : `<span class="badge">${esc(srcName)}</span>`;
+    // If source name ended up empty (server-side fallback also failed) hide
+    // the badge entirely instead of showing an empty pill.
+    const badge = !srcName
+      ? ''
+      : item.sourceUrl
+        ? `<a class="badge badge-link" href="${esc(item.sourceUrl)}" target="_blank" rel="noopener">${esc(srcName)}</a>`
+        : `<span class="badge">${esc(srcName)}</span>`;
     return `
       <div class="mini-card ${isActive ? 'mini-active' : ''}" style="--offset:${offset}">
         <div class="mini-inner">
@@ -1832,11 +1836,13 @@ function renderCodDeck(el) {
           <div class="deck-headline">${title}</div>
           ${caption ? `<div class="deck-desc">${caption}</div>` : ''}
           <div class="deck-footer">
-            <span class="badge">${source}</span>
+            ${url
+              ? `<a class="badge badge-link" href="${url}" target="_blank" rel="noopener" title="Open source">${source}</a>`
+              : `<span class="badge">${source}</span>`}
             <div class="deck-actions">
               <button class="deck-btn cod-chat"     title="Ask about this chart">💬</button>
               <button class="deck-btn cod-note"     title="Add to notebook">📓</button>
-              <a class="deck-btn cod-open" href="${url}" target="_blank" rel="noopener" title="Open source">→</a>
+              <button class="deck-btn cod-next"     title="Next chart">→</button>
             </div>
           </div>
         </div>
@@ -1869,7 +1875,7 @@ function renderCodDeck(el) {
   if (!card) return;
   const url   = card.dataset.chartUrl;
   const title = card.dataset.chartTitle;
-  card.querySelector('.cod-open')?.addEventListener('click', () => setTimeout(() => { codIndex++; renderCodDeck(el); }, 200));
+  card.querySelector('.cod-next')?.addEventListener('click', () => { codIndex++; renderCodDeck(el); });
   card.querySelector('.cod-chat')?.addEventListener('click', (e) => {
     e.preventDefault();
     const ctx = `Chart: "${title}". Source: ${url}.`;

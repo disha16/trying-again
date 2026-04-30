@@ -165,6 +165,16 @@ async function buildTopicClusters(digest, useInternet, model = 'llama-3.3-70b-ve
 
     const angles = await distillAngles({ topic, newsletterExcerpt, webResults, model });
 
+    // Fill in any angle that ended up without a source by inheriting the
+    // parent topic story's source / URL. Otherwise the UI renders a blank
+    // source badge pill.
+    const parentSource = (story.source || '').split(',')[0].trim();
+    const parentUrl    = story.sourceUrl || story.url || '';
+    angles.forEach(a => {
+      if (!a.source    && parentSource) a.source    = parentSource;
+      if (!a.sourceUrl && parentUrl)    a.sourceUrl = parentUrl;
+    });
+
     console.log(`[topic-clusters] "${topic.slice(0, 50)}" → ${angles.length} angles (${webResults.length} web refs)`);
 
     return {

@@ -593,8 +593,11 @@ code {
 .deck-desc { font-size: .82rem; color: var(--muted-2); line-height: 1.5; }
 .deck-context { font-size: .78rem; color: var(--muted); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; font-style: italic; }
 .badge-web { background: rgba(99,179,237,0.12); color: #63b3ed; border-color: rgba(99,179,237,0.3); font-size: .68rem; }
-.deck-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
-.deck-actions { display: flex; gap: 8px; }
+/* Footer holds the source badge on the left; the actions toolbar is pinned
+   to the bottom-right of the card so chat / notebook / arrow always sit in
+   the same place regardless of body length. */
+.deck-footer { display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; padding-right: 140px; min-height: 40px; }
+.deck-actions { display: flex; gap: 8px; position: absolute; right: 24px; bottom: 24px; z-index: 2; }
 .deck-btn { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 50%; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .15s; text-decoration: none; line-height: 1; }
 .deck-btn:link, .deck-btn:visited, .deck-btn:hover, .deck-btn:active { text-decoration: none; }
 .deck-btn:hover { background: var(--accent); color: #fff; }
@@ -1076,6 +1079,9 @@ code {
    deck uses internally (since TL doesn't swipe through a stack). */
 .tl-deck { display: flex; flex-direction: column; gap: 18px; }
 .tl-deck .deck-card { position: relative; top: auto; left: auto; right: auto; transform: none; opacity: 1; }
+/* Slightly extra top padding so the headline never crowds the heart /
+   heart-broken feedback icons sitting in the top-right corner. */
+.tl-deck .deck-card-inner { padding-top: 36px; }
 .tl-deck .deck-points { margin: 6px 0 4px; padding-left: 18px; color: var(--muted); }
 .tl-deck .deck-points li,
 .tl-deck .deck-points li * { font-size: 0.85rem !important; line-height: 1.55 !important; font-weight: 400 !important; font-family: inherit !important; }

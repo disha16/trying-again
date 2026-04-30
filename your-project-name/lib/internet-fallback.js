@@ -186,16 +186,19 @@ async function applyInternetFallback(digest, customSections = [], model = 'qwen-
   }
   const CATS = ['top_today', 'tech', 'us_business', 'india_business', 'global_economies', 'politics', 'everything_else'];
 
-  // Add custom sections with auto-generated queries (use description if present
-  // for sharper Tavily targeting; otherwise fall back to label).
+  // Add custom sections with auto-generated queries. If the user wrote a
+  // description we use it; otherwise we expand the section *name* through a
+  // built-in keyword library so common topics like "Entertainment" / "Sports"
+  // / "Health" still get a strong query without the user having to type one.
+  const { expandTopic } = require('./topic-keywords');
   const customQueries = {};
+  const customDomains = {};
   for (const s of (customSections || [])) {
     if (!CATS.includes(s.id)) {
       CATS.push(s.id);
-      const desc = (s.description || '').trim();
-      customQueries[s.id] = desc
-        ? `${s.label.toLowerCase()} news — ${desc}`
-        : `${s.label.toLowerCase()} news today`;
+      const exp = expandTopic(s.label, s.description);
+      customQueries[s.id] = exp.query;
+      if (exp.domains && exp.domains.length) customDomains[s.id] = exp.domains;
     }
   }
   const QUERIES = { ...CATEGORY_QUERIES, ...customQueries };
@@ -243,7 +246,11 @@ async function applyInternetFallback(digest, customSections = [], model = 'qwen-
     const startPublishedDate = cat === 'top_today'
       ? new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
       : undefined;
-    const includeDomains = cat === 'top_today' ? NEWS_OUTLET_DOMAINS : undefined;
+    // For top_today we restrict to reputable outlets; for custom sections we
+    // use the topic-specific domains the keyword library suggested (if any).
+    const includeDomains = cat === 'top_today'
+      ? NEWS_OUTLET_DOMAINS
+      : (customDomains[cat] || undefined);
     try {
       const res = await searchProvider(query, {
         numResults: Math.max(needed * 4, 25),

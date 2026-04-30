@@ -187,13 +187,15 @@ function buildSystemPrompt(customSections = [], persona = null, model = null) {
   const customJson = customSections.length
     ? '\n' + customSections.map(s => `  "${s.id}": [ ...up to 10 ${s.label} stories... ],`).join('\n')
     : '';
+  const { expandTopic } = require('./topic-keywords');
   const customRules = customSections.length
     ? '\nCUSTOM SECTIONS — STRICT FILTERING (READ CAREFULLY):\n' +
       customSections.map(s => {
-        const desc = (s.description || '').trim();
-        const def = desc
-          ? `Scope: ${desc}`
-          : `Scope: stories whose PRIMARY subject is "${s.label}" (the topic itself, not tangentially related).`;
+        // Use the keyword library to derive a sensible scope when the user
+        // hasn't written one. The library returns a richer description than
+        // the bare label so the LLM has something concrete to filter on.
+        const exp = expandTopic(s.label, s.description);
+        const def = `Scope: ${exp.scope}`;
         return `- ${s.id} ("${s.label}")\n  ${def}\n  RULES for ${s.id}:\n    (a) Only include a cluster if its primary subject CLEARLY matches the scope above.\n    (b) Return an EMPTY array \`[]\` when no clusters truly fit — it is BETTER to return [] than to fill with leftover stories.\n    (c) NEVER pad this section with tech, business, or politics stories that don't match the scope.\n    (d) A passing mention of "${s.label}" is NOT enough — the cluster must be primarily about it.`;
       }).join('\n')
     : '';
@@ -367,6 +369,9 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
   const defaultCats = ['top_today','tech','us_business','india_business','global_economies','politics','everything_else'];
   const allCats = [...defaultCats, ...customSections.map(s => s.id)];
   const undraw = require('./undraw');
+
+  // First pass: copy through cluster-attached images / keywords by headline match.
+  const stillMissing = [];
   for (const cat of allCats) {
     if (!Array.isArray(digest[cat])) continue;
     for (const item of digest[cat]) {
@@ -375,7 +380,26 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
         if (!item.image    && match.image)    item.image    = match.image;
         if (!item.keywords && match.keywords) item.keywords = match.keywords;
       }
-      // Final fallback so every card has an image (unDraw illustration).
+      if (!item.image) stillMissing.push(item);
+    }
+  }
+
+  // Second pass: for items still without an image, try Serper Images. This
+  // gives us real photos when Tavily/RSS/Exa didn't return one. Capped at 30
+  // lookups per digest run to keep Serper quota usage predictable.
+  if (stillMissing.length) {
+    try {
+      const { attachImages } = require('./image-fallback');
+      await attachImages(stillMissing, { maxLookups: 30 });
+    } catch (e) {
+      console.warn('[digest] image-fallback failed:', e.message);
+    }
+  }
+
+  // Final fallback: undraw illustration for any item that *still* has no image.
+  for (const cat of allCats) {
+    if (!Array.isArray(digest[cat])) continue;
+    for (const item of digest[cat]) {
       if (!item.image) item.image = undraw.pick(item.headline || '');
     }
   }

@@ -6,8 +6,8 @@
  * Primary: Exa (authoritative, structured, with images).
  * Fallback chain (in order):
  *   1. Exa            (if EXA_API_KEY is set AND user toggle is on)
- *   2. Tavily         (if TAVILY_API_KEY is set)
- *   3. Serper         (if SERPER_API_KEY is set — 2,500 free Google SERP queries on signup)
+ *   2. Serper         (if SERPER_API_KEY is set — 2,500 free Google SERP queries on signup)
+ *   3. Tavily         (if TAVILY_API_KEY is set)
  *   4. LangSearch     (if LANGSEARCH_API_KEY is set)
  *   5. GDELT          (always; keyless, free, real news with images, ~5s rate limit)
  *   6. Mojeek         (if MOJEEK_API_KEY is set — independent index, small free dev tier)
@@ -16,6 +16,8 @@
  *   8. Brave Search   (if BRAVE_API_KEY is set)
  *   9. LLM pseudo-search — ask the LLM to produce N recent-ish article-style JSON
  *                     results. No real links, but keeps the pipeline alive.
+ *
+ * If Exa is OFF (EXA_API_KEY missing OR user toggle off), the chain starts from Serper.
  *
  * All results are normalised to the same shape:
  *   { title, url, publishedDate?, text?, snippet?, image?, source? }
@@ -331,8 +333,8 @@ async function search(query, opts = {}) {
   }
   const chain = [
     { name: 'exa',        fn: searchExa,        enabled: exaAllowed && !!process.env.EXA_API_KEY },
-    { name: 'tavily',     fn: searchTavily,     enabled: !!process.env.TAVILY_API_KEY },
     { name: 'serper',     fn: searchSerper,     enabled: !!process.env.SERPER_API_KEY },
+    { name: 'tavily',     fn: searchTavily,     enabled: !!process.env.TAVILY_API_KEY },
     { name: 'langsearch', fn: searchLangSearch, enabled: !!process.env.LANGSEARCH_API_KEY },
     // GDELT is keyless and free — always enabled unless explicitly disabled.
     { name: 'gdelt',      fn: searchGDELT,      enabled: process.env.GDELT_DISABLED !== '1' },
