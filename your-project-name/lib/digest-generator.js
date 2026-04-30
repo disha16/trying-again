@@ -141,7 +141,13 @@ const SECTION_RULES_RELAXED = `SECTION RULES:
 - Each cluster appears AT MOST ONCE per category section (no within-category duplicates), but it MAY appear in both top_today AND its category section.`;
 
 function _systemBase(model) {
-  const rules = _isClaude(model) ? SECTION_RULES_STRICT : SECTION_RULES_RELAXED;
+  // Default to RELAXED for every model. Empty category tabs (which the strict
+  // "top_today eats every cluster" rule was producing on small cluster sets)
+  // are far worse UX than letting top_today and category tabs share a story.
+  // Strict mode is still available via env if a user wants it: STRICT_SECTIONS=1.
+  const rules = process.env.STRICT_SECTIONS === '1' && _isClaude(model)
+    ? SECTION_RULES_STRICT
+    : SECTION_RULES_RELAXED;
   return `You are a senior news editor. You receive a list of deduplicated news story clusters (each with headline, sources, and keywords) and produce a structured JSON daily digest.
 
 Each item: { "headline": "...", "description": "...", "source": "<comma-separated sources>", "keywords": ["topic1", "topic2"] }
