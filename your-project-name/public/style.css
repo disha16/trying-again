@@ -1283,3 +1283,45 @@ html[data-theme="dark"] .nav-dark { color: var(--accent-deep); }
 .admin-accordion > summary { outline: none; }
 .admin-accordion > summary .admin-accordion-caret::before { content: '▸ Show'; opacity: .7; }
 .admin-accordion[open] > summary .admin-accordion-caret::before { content: '▾ Hide'; }
+
+
+/* ── Earnings Watch (US Business tab) ── */
+.earnings-block { margin: 22px 0 8px; }
+.earnings-block.hidden { display: none; }
+.earn-title {
+  font-size: 1.4rem;
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: -.3px;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  margin-bottom: 12px;
+}
+.earn-sub { font-size: .8rem; color: var(--muted-2); margin-left: 8px; font-style: italic; font-family: inherit; }
+.earn-list { display: flex; flex-direction: column; gap: 6px; }
+.earn-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: 10px;
+  border-left: 3px solid transparent;
+  text-decoration: none; color: inherit;
+  box-shadow: var(--shadow-sm);
+  transition: border-color .15s, background .15s, box-shadow .15s, transform .15s;
+}
+.earn-card:hover {
+  border-left-color: var(--accent);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-md);
+  transform: translateX(2px);
+}
+.earn-thumb {
+  width: 64px; height: 64px; flex-shrink: 0;
+  border-radius: 8px; overflow: hidden;
+  background: var(--accent-soft);
+}
+.earn-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.earn-body { flex: 1; min-width: 0; }
+.earn-headline { font-size: .9rem; font-weight: 600; line-height: 1.35; color: var(--text); margin-bottom: 4px; }
+.earn-meta { font-size: .72rem; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.earn-author::after, .earn-date::after { content: " ·"; opacity: .5; margin-left: 6px; }
+.earn-source { color: var(--accent); font-weight: 600; }

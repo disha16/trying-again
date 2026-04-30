@@ -117,7 +117,7 @@ function renderDigest(data) {
 
 // Build the section-tab strip dynamically so custom sections (e.g. Entertainment)
 // show up alongside the defaults. Order: top_today → defaults present in data → custom sections.
-const DEFAULT_TAB_ORDER = ['top_today', 'tech', 'us_business', 'india_business', 'global_economies', 'politics', 'everything_else'];
+const DEFAULT_TAB_ORDER = ['top_today', 'us_business', 'tech', 'india_business', 'global_economies', 'politics', 'everything_else'];
 function renderInnerTabs(data) {
   const nav = document.querySelector('.inner-tabs');
   if (!nav) return;
@@ -169,6 +169,11 @@ function renderCategory(cat) {
   deckIndex = 0;
   renderDeck();
   renderTopics(digestData?.[cat] || []);
+  if (cat === 'us_business') {
+    renderEarningsWatch(digestData?.earnings || []);
+  } else {
+    renderEarningsWatch([]); // hide on other tabs
+  }
   if (cat === 'top_today') {
     renderTopicClusters(digestData?.topic_clusters || []);
     loadChartsOfDay();
@@ -444,6 +449,31 @@ function esc(str) {
 /* ── Topic deep-dive clusters ── */
 const clusterState = new Map(); // clusterId -> { items, index }
 let openClusterId  = null;
+
+/* ── Earnings Watch (US Business tab) ── */
+function renderEarningsWatch(items) {
+  const el = $('#earningsWatch');
+  if (!el) return;
+  if (!items?.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="earn-title">Earnings Watch <span class="earn-sub">latest from MarketBeat</span></div>
+    <div class="earn-list">
+      ${items.slice(0, 5).map(it => `
+        <a class="earn-card" href="${esc(it.url)}" target="_blank" rel="noopener">
+          ${it.image ? `<div class="earn-thumb"><img src="${esc(it.image)}" alt="" loading="lazy"/></div>` : ''}
+          <div class="earn-body">
+            <div class="earn-headline">${esc(it.title)}</div>
+            <div class="earn-meta">
+              ${it.author ? `<span class="earn-author">${esc(it.author)}</span>` : ''}
+              ${it.dateLabel ? `<span class="earn-date">${esc(it.dateLabel)}</span>` : ''}
+              <span class="earn-source">MarketBeat</span>
+            </div>
+          </div>
+        </a>
+      `).join('')}
+    </div>`;
+}
 
 function renderTopicClusters(clusters) {
   const el = $('#topicClusters');

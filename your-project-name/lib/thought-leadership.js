@@ -220,3 +220,66 @@ async function getReadTLIds() {
 }
 
 module.exports = { buildThoughtLeadershipDeck, markTLRead, getReadTLIds };
+
+/**
+ * Fallback: when the user has no kind='thought_leadership' senders (or none
+ * delivered in the last 7 days), generate 3-5 short TL-style cards distilled
+ * from the day's top stories using the chosen LLM. Pure LLM — no web search.
+ *
+ * @param {Array} topStories  digest.top_today (each has headline, summary, source, url)
+ * @param {string} model
+ */
+async function buildLLMFallbackDeck(topStories, model = 'gpt-4.1-mini') {
+  if (!Array.isArray(topStories) || !topStories.length) return [];
+  const compact = topStories.slice(0, 10).map((s, i) =>
+    `${i + 1}. ${s.headline}\n   ${(s.summary || '').slice(0, 220)}\n   (${s.source || ''})`
+  ).join('\n\n');
+
+  const SYSTEM = `You are a senior strategist. Read today's top business/tech headlines and produce 3-5 *thought-leadership cards*: each one a sharp, framework-style takeaway that an executive could use in a meeting tomorrow.
+
+Output ONLY a JSON array. Each item:
+{
+  "title":           "<6-10 words, punchy>",
+  "tldr":            "<60-90 words, ~60s read aloud, active voice, no 'the article' references>",
+  "key_points":      ["<bullet 1, <12 words>", "<bullet 2>", "<bullet 3>"],
+  "reading_minutes": 1,
+  "source_label":    "<which 1-2 headlines this synthesises, comma-separated, max 60 chars>"
+}
+
+Rules:
+- Synthesise across multiple headlines when there is a pattern; don't just rephrase one story.
+- No preamble, no markdown fences, just the JSON array.`;
+
+  let raw;
+  try {
+    raw = await _callModel(model, compact, SYSTEM);
+  } catch (e) {
+    console.warn('[tl-fallback] LLM call failed:', e.message);
+    return [];
+  }
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  let parsed;
+  try { parsed = JSON.parse(match[0]); }
+  catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed.slice(0, 5).map((p, idx) => {
+    const id = `tl:llm:${new Date().toISOString().slice(0, 10)}:${idx}`;
+    const topic = (p.title || '') + ' ' + (p.tldr || '');
+    const imgKey = id;
+    return {
+      id,
+      emailId:        null,
+      source:         p.source_label || 'Today\u2019s headlines',
+      title:          p.title || 'Untitled',
+      tldr:           p.tldr || '',
+      keyPoints:      Array.isArray(p.key_points) ? p.key_points.slice(0, 3) : [],
+      readingMinutes: p.reading_minutes || 1,
+      image:          ILLUSTRATION_ARCHIVE[_hashToIdx(imgKey)],
+      isLLMFallback:  true,
+    };
+  });
+}
+
+module.exports.buildLLMFallbackDeck = buildLLMFallbackDeck;

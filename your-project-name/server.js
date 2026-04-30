@@ -202,6 +202,7 @@ app.get('/api/charts',    async (req, res) => {
 // ─── Chart of the Day (Exa + LLM → Chart.js data) ────────────────────────────
 const chartOfDay       = require('./lib/chart-of-day');
 const thoughtLeadership = require('./lib/thought-leadership');
+const earningsLib      = require('./lib/earnings');
 
 let chartInFlight = null;
 
@@ -753,21 +754,39 @@ async function runDigestSSE(req, res) {
         // restricted to sources tagged kind='thought_leadership'. Sort newest
         // first, drop anything already read, take up to 5.
         try {
+          let tlCards = [];
           const tlEntries = await gmail.fetchThoughtLeadership({ days: 7 });
           if (tlEntries.length) {
             const alreadyRead = await thoughtLeadership.getReadTLIds();
             const fresh = tlEntries.filter(e => !alreadyRead.has(`tl:${e.id}`)).slice(0, 5);
             if (fresh.length) {
-              const tlCards = await thoughtLeadership.buildThoughtLeadershipDeck(
-                fresh, digestModel, new Set() // already filtered above
+              tlCards = await thoughtLeadership.buildThoughtLeadershipDeck(
+                fresh, digestModel, new Set()
               );
-              if (tlCards.length) {
-                digest.thought_leadership = tlCards;
-                console.log(`[cron/digest] thought leadership: ${tlCards.length} cards (from last 7d)`);
-              }
             }
           }
+          // LLM fallback when no TL emails (or none summarised) — synthesise from top stories.
+          if (!tlCards.length) {
+            try {
+              tlCards = await thoughtLeadership.buildLLMFallbackDeck(
+                digest.top_today || [], digestModel
+              );
+              if (tlCards.length) console.log(`[cron/digest] thought leadership: ${tlCards.length} LLM-fallback cards`);
+            } catch (e2) { console.warn('[cron/digest] TL LLM fallback error:', e2.message); }
+          } else {
+            console.log(`[cron/digest] thought leadership: ${tlCards.length} cards (from last 7d)`);
+          }
+          if (tlCards.length) digest.thought_leadership = tlCards;
         } catch (e) { console.warn('[cron/digest] thought-leadership error:', e.message); }
+
+        // Earnings Watch (MarketBeat scrape) — 5 most recent earnings articles.
+        try {
+          const earnings = await earningsLib.fetchEarnings(5);
+          if (earnings.length) {
+            digest.earnings = earnings;
+            console.log(`[cron/digest] earnings: ${earnings.length} articles from MarketBeat`);
+          }
+        } catch (e) { console.warn('[cron/digest] earnings error:', e.message); }
 
         // Run topic clusters and story enricher in parallel — deep dives appear ASAP
         const [clusters_result] = await Promise.all([
