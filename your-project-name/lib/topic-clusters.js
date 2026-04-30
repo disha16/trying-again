@@ -104,15 +104,25 @@ ${webExcerpts ? `WEB EXCERPTS (use only to add missing context — do NOT contra
   try {
     raw = await _callModel(model, prompt, ANGLES_SYSTEM);
   } catch (e) {
-    console.warn(`[topic-clusters] LLM distillation failed for "${topic.slice(0, 50)}":`, e.message);
-    return [];
+    console.warn(`[topic-clusters] LLM distillation FAILED (network/model) for "${topic.slice(0, 50)}":`, e.message);
+    return _fallbackAngles({ topic, newsletterExcerpt, webResults });
   }
 
   const match = raw.match(/\[[\s\S]*\]/);
-  if (!match) return [];
+  if (!match) {
+    console.warn(`[topic-clusters] LLM returned no JSON array for "${topic.slice(0, 50)}". Raw head:`, (raw || '').slice(0, 200));
+    return _fallbackAngles({ topic, newsletterExcerpt, webResults });
+  }
 
   let angles;
-  try { angles = JSON.parse(match[0]); } catch { return []; }
+  try { angles = JSON.parse(match[0]); } catch (e) {
+    console.warn(`[topic-clusters] JSON parse failed for "${topic.slice(0, 50)}":`, e.message, '— Raw match head:', match[0].slice(0, 200));
+    return _fallbackAngles({ topic, newsletterExcerpt, webResults });
+  }
+  if (!Array.isArray(angles) || !angles.length) {
+    console.warn(`[topic-clusters] LLM returned empty array for "${topic.slice(0, 50)}"`);
+    return _fallbackAngles({ topic, newsletterExcerpt, webResults });
+  }
 
   const usedImages = new Set();
   return angles.slice(0, 5).map(a => {
@@ -138,9 +148,14 @@ ${webExcerpts ? `WEB EXCERPTS (use only to add missing context — do NOT contra
  * @returns {Promise<Array>}            Array of { topic, summary, image, stories[] }
  */
 async function buildTopicClusters(digest, useInternet, model = 'llama-3.3-70b-versatile') {
-  // Reduced from 5 → 3 to minimize Tavily/Brave/Exa usage per digest.
-  const topStories = (digest.top_today || []).slice(0, 3);
-  if (!topStories.length) return [];
+  // 5 deep-dive clusters per digest. Web-search burden is mitigated by the
+  // unified provider chain (Exa→Serper→Tavily→LangSearch→GDELT→Mojeek→SearXNG→Brave→LLM).
+  const topStories = (digest.top_today || []).slice(0, 5);
+  if (!topStories.length) {
+    console.warn('[topic-clusters] no top_today stories — cannot build deep dives');
+    return [];
+  }
+  console.log(`[topic-clusters] building deep dives for top ${topStories.length} stories`);
 
   const canWebSearch = useInternet && hasRealSearchProvider();
 
@@ -186,6 +201,46 @@ async function buildTopicClusters(digest, useInternet, model = 'llama-3.3-70b-ve
   }));
 
   return clusters.filter(c => c.stories && c.stories.length > 0);
+}
+
+/**
+ * Deterministic fallback when the LLM cannot produce valid JSON. Synthesises a
+ * minimum-viable angle set from the newsletter excerpt + first few web results,
+ * so the user always sees SOMETHING in the deep-dive section.
+ */
+function _fallbackAngles({ topic, newsletterExcerpt, webResults }) {
+  const out = [];
+  const seen = new Set();
+  const push = (headline, description, src, srcUrl, img) => {
+    const key = (headline || '').toLowerCase().trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      headline:       headline.slice(0, 110),
+      description:    (description || '').slice(0, 220),
+      source:         src || '',
+      sourceUrl:      srcUrl || '',
+      image:          img || require('./undraw').pick(headline),
+      internetSource: true,
+    });
+  };
+  // 1: anchor angle from the newsletter excerpt itself
+  if (newsletterExcerpt) {
+    push(`${topic} — the core update`, newsletterExcerpt.slice(0, 220));
+  }
+  // 2..5: one angle per top web result
+  for (const r of (webResults || []).slice(0, 4)) {
+    if (!r.title) continue;
+    push(
+      r.title,
+      cleanText(r.text || r.snippet).slice(0, 220),
+      sourceName(r.url || ''),
+      r.url || '',
+      isGoodImage(r.image, r.url) ? r.image : null,
+    );
+  }
+  console.log(`[topic-clusters] fallback synthesised ${out.length} angles for "${topic.slice(0, 40)}"`);
+  return out;
 }
 
 module.exports = { buildTopicClusters };
