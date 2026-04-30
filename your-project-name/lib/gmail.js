@@ -92,13 +92,20 @@ function extractImageUrls(msg) {
   const html = extractHtml(msg.payload);
   if (!html) return [];
   const urls = [];
-  const re   = /src=["'](https:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^"']*)?)/gi;
+  const re   = /<img[^>]+src=["'](https:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^"']*)?)["'][^>]*>/gi;
   let m;
   while ((m = re.exec(html)) !== null) {
+    const fullTag = m[0];
     const url = m[1];
-    if (/open\.|track|pixel|beacon|spacer|logo|header|padded/i.test(url)) continue;
+    // Skip tracking/structural/social-share images.
+    if (/open\.|track|pixel|beacon|spacer|logo|header|padded|sprite|favicon|email-images\/design-system|social[_-]?icon|share[_-]?icon|button|divider|footer|advert|sponsor|gravatar/i.test(url)) continue;
+    // Skip tiny images (width/height attributes < 200).
+    const wMatch = fullTag.match(/\swidth=["']?(\d+)/i);
+    const hMatch = fullTag.match(/\sheight=["']?(\d+)/i);
+    if (wMatch && Number(wMatch[1]) < 200) continue;
+    if (hMatch && Number(hMatch[1]) < 200) continue;
     if (!urls.includes(url)) urls.push(url);
-    if (urls.length >= 3) break;
+    if (urls.length >= 5) break;
   }
   return urls;
 }

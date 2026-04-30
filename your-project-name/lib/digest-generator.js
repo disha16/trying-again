@@ -334,6 +334,7 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
   }
   const defaultCats = ['top_today','tech','us_business','india_business','global_economies','politics','everything_else'];
   const allCats = [...defaultCats, ...customSections.map(s => s.id)];
+  const undraw = require('./undraw');
   for (const cat of allCats) {
     if (!Array.isArray(digest[cat])) continue;
     for (const item of digest[cat]) {
@@ -342,6 +343,8 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
         if (!item.image    && match.image)    item.image    = match.image;
         if (!item.keywords && match.keywords) item.keywords = match.keywords;
       }
+      // Final fallback so every card has an image (unDraw illustration).
+      if (!item.image) item.image = undraw.pick(item.headline || '');
     }
   }
 

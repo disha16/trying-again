@@ -208,10 +208,7 @@ let chartInFlight = null;
 
 app.get('/api/chart-of-day', async (req, res) => {
   try {
-    // Admin toggle: when useExa is off we never generate or serve charts via Exa.
-    const settings0 = await storage.getSettings();
-    if (settings0.useExa !== true && settings0.showImages !== true) return res.status(204).end();
-
+    // Chart-of-day v3 uses public RSS feeds (Exa-independent), so always allow.
     // Accept an optional ?date=YYYY-MM-DD so the date-picker can request a cached run.
     const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
       ? req.query.date
@@ -421,22 +418,39 @@ app.get('/api/notes/:id/similar', async (req, res) => {
   const notes = await storage.getNotes();
   const note  = notes.find(n => n.id == req.params.id);
   if (!note) return res.status(404).json({ error: 'Not found' });
-  if (!(await storage.isExaEnabled())) return res.json({ stories: [] });
-  if (!process.env.EXA_API_KEY) return res.json({ stories: [] });
+  const exaOn   = (await storage.isExaEnabled()) && !!process.env.EXA_API_KEY;
+  const tavilyOn = !!process.env.TAVILY_API_KEY;
+  if (!exaOn && !tavilyOn) return res.json({ stories: [] });
   try {
-    const Exa = require('exa-js').default;
-    const exa = new Exa(process.env.EXA_API_KEY);
     const query = note.title + (note.entries[0] ? ' ' + note.entries[0].headline.slice(0, 60) : '');
     const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|placeholder|pixel|tracking|beacon/i;
     const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|food|recipe|cook|lifestyle|wellness|fitness/i;
-    const res2 = await exa.searchAndContents(query, { numResults: 10, category: 'news', text: { maxCharacters: 400 } });
+    let rawResults = [];
+    // Prefer Exa when admin has it on; otherwise (or on Exa failure) use Tavily.
+    if (exaOn) {
+      try {
+        const Exa = require('exa-js').default;
+        const exa = new Exa(process.env.EXA_API_KEY);
+        const r = await exa.searchAndContents(query, { numResults: 10, category: 'news', text: { maxCharacters: 400 } });
+        rawResults = (r.results || []).map(x => ({ title: x.title, url: x.url, image: x.image || null, text: x.text || '' }));
+      } catch (e) { console.warn('[notes/similar] exa failed, falling back to tavily:', e.message); }
+    }
+    if (!rawResults.length && tavilyOn) {
+      try {
+        const { searchTavily } = require('./lib/web-search');
+        const hits = await searchTavily(query, { numResults: 10 });
+        rawResults = hits.map(x => ({ title: x.title, url: x.url, image: x.image || null, text: x.snippet || x.text || '' }));
+      } catch (e) { console.warn('[notes/similar] tavily failed:', e.message); }
+    }
     const existingHeadlines = new Set(note.entries.map(e => e.headline?.toLowerCase()));
-    const stories = res2.results
+    const stories = rawResults
       .filter(r => r.title && !existingHeadlines.has(r.title.toLowerCase()))
       .filter(r => !r.image || (!BAD_IMAGE.test(r.image) && !BAD_DOMAIN.test(r.url || '')))
       .slice(0, 8)
       .map(r => {
         const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, '').split('.')[0]; } catch { return ''; } })();
+        let img = r.image;
+        if (!img) { try { img = require('./lib/undraw').pick(r.title || host); } catch {} }
         const cleanDesc = (r.text || '')
         .replace(/#{1,6}\s*/g, '')
         .replace(/SENSEX[\d\s.,+\-#]+/gi, '')
@@ -450,7 +464,7 @@ app.get('/api/notes/:id/similar', async (req, res) => {
           description: cleanDesc,
           source:    host.charAt(0).toUpperCase() + host.slice(1),
           sourceUrl: r.url,
-          image:     (!BAD_IMAGE.test(r.image || '') && !BAD_DOMAIN.test(r.url || '')) ? r.image : null,
+          image:     (!BAD_IMAGE.test(img || '') && !BAD_DOMAIN.test(r.url || '')) ? img : null,
         };
       });
     res.json({ stories });
@@ -486,26 +500,51 @@ app.post('/api/push-inbox', async (req, res) => {
 
 // ─── Chat ──────────────────────────────────────────────────────────────────────
 
-async function fetchChatWebContext(query) {
-  if (!(await storage.isExaEnabled())) return '';
-  if (!process.env.EXA_API_KEY) return '';
-  try {
-    const Exa = require('exa-js').default;
-    const exa = new Exa(process.env.EXA_API_KEY);
-    const res = await exa.searchAndContents(query, {
-      numResults: 3,
-      category:   'news',
-      text:       { maxCharacters: 1000 },
-    });
-    const snippets = res.results
-      .map(r => `[${r.title}](${r.url})\n${r.text || ''}`)
-      .filter(Boolean)
-      .join('\n\n---\n\n');
-    return snippets ? `\n\nLIVE WEB CONTEXT (from Exa search for "${query}"):\n${snippets}` : '';
-  } catch (e) {
-    console.warn('[chat/exa]', e.message);
-    return '';
+// Heuristic: does the user want us to hit the live web for this turn?
+// Triggered by explicit phrases ("search", "look up", "use the internet", "web",
+// "google", "latest", "news on") OR by question words combined with a year/date.
+function wantsWebSearch(text) {
+  if (!text) return false;
+  const s = text.toLowerCase();
+  const explicit = /\b(search|look\s*(?:up|it\s*up)|use\s+the\s+(?:internet|web)|on\s+the\s+web|google\s+it|browse|fetch|find\s+(?:online|on\s+the\s+web))\b/.test(s);
+  if (explicit) return true;
+  // "latest" / "current" / "today" / "this week" + question
+  const recency = /\b(latest|current|today|tonight|this\s+(?:week|month)|right\s+now|breaking|news\s+on)\b/.test(s);
+  const isQuestion = /\?$/.test(s.trim()) || /^(what|who|when|where|why|how|did|is|was|are)\b/.test(s);
+  return recency && isQuestion;
+}
+
+async function fetchChatWebContext(query, { force = false } = {}) {
+  if (!query) return '';
+  if (!force && !wantsWebSearch(query)) return '';
+
+  // Prefer Tavily (free dev tier, always-on). Fall back to Exa only if the
+  // admin toggle is on AND the user explicitly asked.
+  const { searchTavily, searchExa } = require('./lib/web-search');
+  const tryTavily = !!process.env.TAVILY_API_KEY;
+  const tryExa    = !tryTavily && process.env.EXA_API_KEY && (await storage.isExaEnabled());
+
+  let results = [];
+  let provider = '';
+  if (tryTavily) {
+    try {
+      results  = await searchTavily(query, { numResults: 4 });
+      provider = 'Tavily';
+    } catch (e) { console.warn('[chat/tavily]', e.message); }
   }
+  if (!results.length && tryExa) {
+    try {
+      results  = await searchExa(query, { numResults: 4 });
+      provider = 'Exa';
+    } catch (e) { console.warn('[chat/exa]', e.message); }
+  }
+  if (!results.length) return '';
+
+  const snippets = results
+    .slice(0, 4)
+    .map(r => `• [${r.title || r.url}](${r.url})${r.publishedDate ? ` — ${r.publishedDate}` : ''}\n  ${(r.snippet || r.text || '').slice(0, 600)}`)
+    .join('\n\n');
+  return `\n\nLIVE WEB CONTEXT (${provider} search for "${query.slice(0, 120)}"):\n${snippets}\n\nCite the URL inline when you use a fact from above.`;
 }
 
 app.post('/chat', async (req, res) => {
@@ -779,10 +818,13 @@ async function runDigestSSE(req, res) {
           if (tlCards.length) digest.thought_leadership = tlCards;
         } catch (e) { console.warn('[cron/digest] thought-leadership error:', e.message); }
 
-        // Earnings Watch (MarketBeat scrape) — 5 most recent earnings articles.
+        // Earnings Watch (MarketBeat scrape) — 5 most recent earnings articles,
+        // each with an LLM-generated 2-line insightful summary.
         try {
-          const earnings = await earningsLib.fetchEarnings(5);
+          let earnings = await earningsLib.fetchEarnings(5);
           if (earnings.length) {
+            try { earnings = await earningsLib.summarizeEarnings(earnings, digestModel); }
+            catch (e) { console.warn('[cron/digest] earnings summary error:', e.message); }
             digest.earnings = earnings;
             console.log(`[cron/digest] earnings: ${earnings.length} articles from MarketBeat`);
           }

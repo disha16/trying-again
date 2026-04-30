@@ -192,36 +192,36 @@ function renderThoughtLeadership(cards) {
   if (!block || !deck) return;
   if (!cards || !cards.length) { block.classList.add('hidden'); return; }
   block.classList.remove('hidden');
-  deck.innerHTML = cards.map((c, i) => `
-    <article class="tl-card" data-tl-id="${c.id}" data-idx="${i}">
-      ${c.image ? `<div class="tl-img" style="background-image:url('${c.image}')"></div>` : ''}
-      <div class="tl-body">
-        <div class="tl-source">${c.source}</div>
-        <h3 class="tl-headline">${c.title}</h3>
-        <p class="tl-tldr">${c.tldr}</p>
-        ${Array.isArray(c.keyPoints) && c.keyPoints.length ? `<ul class="tl-points">${c.keyPoints.map(p => `<li>${p}</li>`).join('')}</ul>` : ''}
-        <div class="tl-actions">
-          <button class="tl-done" data-id="${c.id}">Mark read</button>
-          <span class="tl-meta">∼ ${c.readingMinutes || 1} min</span>
+  // Render each TL card using the same .deck-card template as the top-10 deck:
+  // image at top, source badge + arrow button at bottom, no "mark read" badge.
+  deck.innerHTML = cards.map((c) => {
+    const srcName = prettifySource(c.source || 'Thought Leadership');
+    const url     = c.url || c.sourceUrl || sourceMap[c.source] || '';
+    const badge   = url
+      ? `<a class="badge badge-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(srcName)}</a>`
+      : `<span class="badge">${esc(srcName)}</span>`;
+    const body    = c.tldr || c.description || '';
+    const points  = Array.isArray(c.keyPoints) && c.keyPoints.length
+      ? `<ul class="deck-points">${c.keyPoints.map(p => `<li>${esc(p)}</li>`).join('')}</ul>`
+      : '';
+    return `
+      <div class="deck-card deck-active tl-deck-card" style="--offset:0">
+        <div class="deck-card-inner">
+          ${c.image ? `<img class="deck-image" src="${esc(c.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          <div class="deck-body">
+            <div class="deck-headline">${esc(c.title || '')}</div>
+            ${body ? `<div class="deck-desc">${esc(body)}</div>` : ''}
+            ${points}
+            <div class="deck-footer">
+              ${badge}
+              <div class="deck-actions">
+                ${url ? `<a class="deck-btn" href="${esc(url)}" target="_blank" rel="noopener" title="Open">→</a>` : ''}
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-    </article>
-  `).join('');
-  deck.querySelectorAll('.tl-done').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const id = e.currentTarget.dataset.id;
-      try {
-        await fetch('/api/mark-read', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ headline: id, category: 'thought_leadership', source: 'thought_leadership' }),
-        });
-      } catch {}
-      const card = e.currentTarget.closest('.tl-card');
-      card?.classList.add('tl-card-read');
-      setTimeout(() => card?.remove(), 300);
-    });
-  });
+      </div>`;
+  }).join('');
 }
 
 /* ── Topics block ── */
@@ -464,10 +464,11 @@ function renderEarningsWatch(items) {
           ${it.image ? `<div class="earn-thumb"><img src="${esc(it.image)}" alt="" loading="lazy"/></div>` : ''}
           <div class="earn-body">
             <div class="earn-headline">${esc(it.title)}</div>
+            ${it.description ? `<div class="earn-desc">${esc(it.description)}</div>` : ''}
             <div class="earn-meta">
               ${it.author ? `<span class="earn-author">${esc(it.author)}</span>` : ''}
               ${it.dateLabel ? `<span class="earn-date">${esc(it.dateLabel)}</span>` : ''}
-              <span class="earn-source">MarketBeat</span>
+              <span class="earn-arrow" aria-hidden="true">→</span>
             </div>
           </div>
         </a>

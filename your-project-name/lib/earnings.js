@@ -107,4 +107,39 @@ async function fetchEarnings(limit = 5) {
   return items;
 }
 
-module.exports = { fetchEarnings };
+/**
+ * Add a sharp 2-line insightful summary (`description` field) to each earnings
+ * article via the digest LLM. Falls back to the existing description / a
+ * generic line on any failure so the cron never blocks on this.
+ */
+async function summarizeEarnings(items, model) {
+  if (!Array.isArray(items) || !items.length) return items || [];
+  let _callModel;
+  try { ({ _callModel } = require('./digest-generator')); }
+  catch { return items; }
+
+  const targetModel = model || 'claude-haiku-4-5-20251001';
+  const prompt =
+    `For each of the following ${items.length} earnings news headlines, write a sharp, ` +
+    `insightful TWO-LINE summary (max ~40 words). Focus on what an investor or ` +
+    `business reader should take away — beats/misses, guidance, sector signal, ` +
+    `or competitive read-through. Avoid restating the headline.\n\n` +
+    items.map((it, i) => `${i + 1}. ${it.title}` + (it.author ? ` (by ${it.author})` : '')).join('\n') +
+    `\n\nReturn ONLY a JSON array of ${items.length} strings in the same order, no prose.`;
+
+  let parsed = null;
+  try {
+    const raw   = await _callModel(targetModel, prompt, 'You are a concise financial editor. Return strict JSON only.');
+    const match = raw && raw.match(/\[[\s\S]*\]/);
+    if (match) parsed = JSON.parse(match[0]);
+  } catch (e) {
+    console.warn('[earnings] summary LLM failed:', e.message);
+  }
+
+  return items.map((it, i) => ({
+    ...it,
+    description: (parsed && typeof parsed[i] === 'string' && parsed[i].trim()) || it.description || '',
+  }));
+}
+
+module.exports = { fetchEarnings, summarizeEarnings };
