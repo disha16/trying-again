@@ -298,15 +298,23 @@ app.get('/api/chart-of-day', async (req, res) => {
       : undefined;
 
     // Coalesce concurrent callers.
+    let payload;
     if (chartInFlight) {
-      const payload = await chartInFlight;
-      return res.json(payload);
+      payload = await chartInFlight;
+    } else {
+      chartInFlight = chartOfDay.getCharts({ dateKey }).finally(() => { chartInFlight = null; });
+      payload = await chartInFlight;
     }
-    chartInFlight = chartOfDay.getCharts({ dateKey }).finally(() => { chartInFlight = null; });
-    const payload = await chartInFlight;
-    // Add 2-line LLM caption to each chart on the fly if missing.
+    // Add 2-line LLM caption to each chart on the fly if missing, then persist
+    // back to KV so subsequent calls don't re-run the LLM.
     if (Array.isArray(payload?.charts) && payload.charts.some(c => !c.caption)) {
-      try { payload.charts = await chartOfDay.summarizeCharts(payload.charts); } catch {}
+      try {
+        payload.charts = await chartOfDay.summarizeCharts(payload.charts);
+        const key = `cache:chart-of-day:${payload.dateKey || (dateKey || new Date().toISOString().slice(0,10))}`;
+        try { await require('./lib/storage').setKV(key, payload); } catch (e) { console.warn('[chart] caption cache write failed:', e.message); }
+      } catch (e) {
+        console.warn('[chart] inline caption enrich failed:', e.message);
+      }
     }
     res.json(payload);
   } catch (e) {
