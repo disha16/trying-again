@@ -174,6 +174,7 @@ app.get('/api/debug-storage', async (req, res) => {
         MOJEEK_API_KEY:     !!process.env.MOJEEK_API_KEY,
         SEARXNG_URL:        !!process.env.SEARXNG_URL,
       },
+      quality_note: await storage.getQualityNote().catch(() => null),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

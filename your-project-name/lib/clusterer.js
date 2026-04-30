@@ -22,7 +22,7 @@ const SYSTEM = `You receive newsletter email bodies grouped by source. Your job 
 
 Return ONLY a JSON array — no markdown, no extra text:
 [
-  { "headline": "factual headline you wrote", "sources": ["Source A", "Source B"], "keywords": ["keyword1", "keyword2"] },
+  { "headline": "factual headline you wrote", "sources": ["Source A", "Source B"], "keywords": ["keyword1", "keyword2"], "excerpt": "verbatim 2-4 sentence passage from one of the source emails that explains the story (max 600 chars)" },
   ...
 ]
 
@@ -36,6 +36,7 @@ Rules for headlines:
 - Under 120 characters
 - Merge same stories across sources; list ALL sources that covered it
 - keywords: 2-4 words capturing the topic (used for categorisation later)
+- excerpt: a verbatim passage of 2-4 sentences pulled DIRECTLY from one of the source newsletter bodies that gives concrete factual context for this story. Max 600 chars. Do NOT paraphrase. Do NOT summarise. Do NOT invent. If multiple sources cover the story, pick the source with the most factual / numeric content. This excerpt is consumed downstream to write deep-dive angles without needing a web search.
 - Max 60 stories total`;
 
 async function _callModel(model, prompt) {
@@ -86,6 +87,32 @@ async function clusterHeadlines(entries, model = 'llama-3.3-70b-versatile') {
   if (allImages.length) {
     clusters.forEach((c, i) => { c.image = allImages[i % allImages.length]; });
   }
+
+  // Safety net: if the LLM omitted excerpts for any cluster, backfill from the
+  // first matching source body. Angle generation needs concrete text to chew on.
+  const bodyByName = new Map();
+  for (const v of valid) {
+    if (!bodyByName.has(v.source)) bodyByName.set(v.source, v.bodyText);
+  }
+  clusters.forEach(c => {
+    if (c.excerpt && c.excerpt.length > 80) return;
+    const firstSrc = (c.sources || []).find(s => bodyByName.has(s));
+    if (!firstSrc) return;
+    const body = bodyByName.get(firstSrc) || '';
+    // Pull a slice that ideally contains the headline keywords; fallback to the head of the body.
+    const head = (c.headline || '').toLowerCase().split(/\s+/).filter(w => w.length > 4).slice(0, 3);
+    let excerpt = '';
+    if (head.length) {
+      const lower = body.toLowerCase();
+      const idx = head.map(w => lower.indexOf(w)).filter(i => i >= 0).sort((a, b) => a - b)[0];
+      if (idx != null && idx >= 0) {
+        const start = Math.max(0, idx - 80);
+        excerpt = body.slice(start, start + 600).trim();
+      }
+    }
+    if (!excerpt) excerpt = body.slice(0, 600).trim();
+    c.excerpt = excerpt;
+  });
 
   console.log(`[cluster] → ${clusters.length} unique stories`);
   return clusters;
