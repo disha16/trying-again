@@ -227,8 +227,15 @@ function renderInnerTabs(data) {
   // Always show top_today even if empty so it's a stable home tab
   if (!presentDefaults.includes('top_today')) presentDefaults.unshift('top_today');
 
-  const customKeys = Object.keys(data)
-    .filter(k => k.startsWith('custom_') && Array.isArray(data[k]) && data[k].length > 0 && !disabledSections.has(k));
+  // Custom tabs: always show user-defined custom sections (from settings), even
+  // when the digest returned an empty array. Combine with any custom keys that
+  // appear only in the data for backward compatibility.
+  const settingsCustomKeys = settingsSections
+    .filter(s => s.id && s.id.startsWith('custom_') && s.enabled !== false)
+    .map(s => s.id);
+  const dataCustomKeys = Object.keys(data)
+    .filter(k => k.startsWith('custom_') && Array.isArray(data[k]) && !disabledSections.has(k));
+  const customKeys = [...new Set([...settingsCustomKeys, ...dataCustomKeys])];
 
   const allCats = [...presentDefaults, ...customKeys];
   // If currentCat no longer exists in this digest, fall back to top_today
@@ -359,7 +366,15 @@ function renderDeck() {
   const panel = $('#newsPanel');
 
   if (!deckItems.length) {
-    panel.innerHTML = '<p style="color:var(--muted);font-size:.88rem;padding:8px 0">No items in this category.</p>';
+    const isCustom = currentCat && currentCat.startsWith('custom_');
+    if (isCustom) {
+      panel.innerHTML = `<div class="deck-done deck-empty">
+        <p>No stories matched this section’s scope today.</p>
+        <p class="deck-empty-hint">Tip: head to <strong>Persona → Custom sections</strong> and click ✏️ to refine the description — a sharper scope helps the digest and web fill find better matches.</p>
+      </div>`;
+    } else {
+      panel.innerHTML = '<p style="color:var(--muted);font-size:.88rem;padding:8px 0">No items in this category.</p>';
+    }
     return;
   }
 
@@ -558,7 +573,7 @@ function renderTopicClusters(clusters) {
   el.innerHTML = `<div class="tc-title">Deep Dives</div>` +
     clusters.map((c, i) => {
       clusterState.set(i, { items: c.stories || [], index: 0, summary: c.summary || '' });
-      const count = c.stories?.length ? `<span class="tc-count">${c.stories.length} angles</span>` : '';
+      const count = ''; // "N angles" badge removed per design feedback
       return `
         <div class="tc-row" id="tc-row-${i}">
           <button class="tc-header" data-ci="${i}">
@@ -1763,79 +1778,125 @@ async function loadChartsOfDay() {
   }
 }
 
+// Chart-of-Day stack state (parallel to Top-10 deckItems/deckIndex).
+let codItems = [];
+let codIndex = 0;
+
 function renderChartOfDayV2(el, payload) {
-  const charts = Array.isArray(payload?.charts) ? payload.charts : [];
-  if (!charts.length) {
+  codItems = Array.isArray(payload?.charts) ? payload.charts : [];
+  codIndex = 0;
+  if (!codItems.length) {
     el.innerHTML = `<div class="charts-title">Chart of the Day</div><p class="cotd-error">No charts available right now. Check your chart sources in Settings.</p>`;
     return;
   }
   el.innerHTML = `
     <div class="charts-title">Chart of the Day</div>
-    <div class="cod-grid">
-      ${charts.map(c => {
-        const url     = esc(c.postUrl || c.sourceUrl || '#');
-        const title   = esc(c.title || 'Chart');
-        const caption = esc(c.caption || c.context || '');
-        const source  = esc(c.source || '');
-        return `
-        <article class="cod-card deck-card-style" data-chart-url="${url}" data-chart-title="${title}">
-          <div class="cod-card-inner">
-            <div class="cod-card-image-plate">
-              ${c.image
-                ? `<img class="cod-card-img" src="/api/img-proxy?url=${encodeURIComponent(c.image)}" data-orig="${esc(c.image)}" alt="${title}" loading="lazy" onerror="__codImgFail(this)" />
-                   <div class="cod-card-img-placeholder hidden">
-                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
-                     <span>Chart preview unavailable</span>
-                   </div>`
-                : `<div class="cod-card-img-placeholder">
-                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
-                     <span>Chart preview unavailable</span>
-                   </div>`}
-            </div>
-            <div class="cod-card-body">
-              <h4 class="cod-card-title">${title}</h4>
-              ${caption ? `<p class="cod-card-caption">${caption}</p>` : ''}
-              <div class="cod-card-footer">
-                <span class="badge">${source}</span>
-                <div class="cod-card-actions">
-                  <button class="icon-btn cod-chat"   aria-label="Ask about this chart" title="Ask about this chart">💬</button>
-                  <button class="icon-btn cod-note"   aria-label="Add to notebook"      title="Add to notebook">📓</button>
-                  <a class="icon-btn cod-open" href="${url}" target="_blank" rel="noopener" aria-label="Open source" title="Open source">→</a>
-                </div>
-              </div>
+    <div class="cod-deck-wrap"></div>`;
+  renderCodDeck(el);
+}
+
+function renderCodDeck(el) {
+  const wrap = el.querySelector('.cod-deck-wrap');
+  if (!wrap) return;
+
+  if (codIndex >= codItems.length) {
+    wrap.innerHTML = `<div class="deck-done"><p>You’ve viewed all ${codItems.length} charts. Tap to start over.</p><button class="cod-restart-btn">Start over</button></div>`;
+    wrap.querySelector('.cod-restart-btn')?.addEventListener('click', () => { codIndex = 0; renderCodDeck(el); });
+    return;
+  }
+
+  // Build stack: current + up to 2 behind (mirrors Top-10 .deck-stack pattern).
+  const stackHtml = codItems.slice(codIndex, codIndex + 3).map((c, offset) => {
+    const isActive = offset === 0;
+    const url      = esc(c.postUrl || c.sourceUrl || '#');
+    const title    = esc(c.title || 'Chart');
+    const caption  = esc(c.caption || c.context || '');
+    const source   = esc(c.source || '');
+    return `
+    <div class="deck-card cod-card ${isActive ? 'deck-active' : ''}" style="--offset:${offset}" data-chart-url="${url}" data-chart-title="${title}">
+      <div class="deck-card-inner">
+        <div class="cod-card-image-plate">
+          ${c.image
+            ? `<img class="cod-card-img" src="/api/img-proxy?url=${encodeURIComponent(c.image)}" data-orig="${esc(c.image)}" alt="${title}" loading="lazy" onerror="__codImgFail(this)" />
+               <div class="cod-card-img-placeholder hidden">
+                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+                 <span>Chart preview unavailable</span>
+               </div>`
+            : `<div class="cod-card-img-placeholder">
+                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+                 <span>Chart preview unavailable</span>
+               </div>`}
+        </div>
+        <div class="deck-body">
+          <span class="deck-counter">${codIndex + 1} / ${codItems.length}</span>
+          <div class="deck-headline">${title}</div>
+          ${caption ? `<div class="deck-desc">${caption}</div>` : ''}
+          <div class="deck-footer">
+            <span class="badge">${source}</span>
+            <div class="deck-actions">
+              <button class="deck-btn cod-chat"     title="Ask about this chart">💬</button>
+              <button class="deck-btn cod-note"     title="Add to notebook">📓</button>
+              <a class="deck-btn cod-open" href="${url}" target="_blank" rel="noopener" title="Open source">→</a>
             </div>
           </div>
-        </article>`;
-      }).join('')}
+        </div>
+      </div>
     </div>`;
-  // Wire chat + notebook buttons (mirrors deck-card behaviour).
-  el.querySelectorAll('.cod-card').forEach(card => {
-    const url   = card.dataset.chartUrl;
-    const title = card.dataset.chartTitle;
-    card.querySelector('.cod-chat')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      const ctx = `Chart: "${title}". Source: ${url}.`;
-      try { localStorage.setItem('chatPreload', ctx); } catch {}
-      $('[data-tab="chat"]')?.click();
+  }).reverse().join('');
+
+  wrap.innerHTML = `<div class="deck-stack cod-stack">${stackHtml}</div>`;
+
+  // Size stack to active card height (same trick as Top-10).
+  const stack      = wrap.querySelector('.cod-stack');
+  const activeCard = wrap.querySelector('.deck-active');
+  if (stack && activeCard) {
+    const setHeight = () => { stack.style.height = activeCard.offsetHeight + 'px'; };
+    requestAnimationFrame(setHeight);
+    activeCard.querySelectorAll('img').forEach(img => {
+      if (!img.complete) img.addEventListener('load', setHeight, { once: true });
+      img.addEventListener('error', setHeight, { once: true });
     });
-    card.querySelector('.cod-note')?.addEventListener('click', async (e) => {
-      e.preventDefault();
-      try {
-        await fetch('/api/notes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            description: 'Chart from ' + (card.querySelector('.badge')?.textContent || 'source'),
-            source_url: url,
-            image_url: card.querySelector('.cod-card-img')?.src || null,
-            kind: 'chart',
-          }),
-        });
-        showSaveStatus?.('Saved to notebook');
-      } catch (err) { console.warn('chart → note failed', err); }
-    });
+    if ('ResizeObserver' in window) {
+      const ro = new ResizeObserver(setHeight);
+      ro.observe(activeCard);
+      stack._cleanup?.();
+      stack._cleanup = () => ro.disconnect();
+    }
+  }
+
+  // Wire button actions on the active card.
+  const card = wrap.querySelector('.deck-active');
+  if (!card) return;
+  const url   = card.dataset.chartUrl;
+  const title = card.dataset.chartTitle;
+  card.querySelector('.cod-open')?.addEventListener('click', () => setTimeout(() => { codIndex++; renderCodDeck(el); }, 200));
+  card.querySelector('.cod-chat')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const ctx = `Chart: "${title}". Source: ${url}.`;
+    try { localStorage.setItem('chatPreload', ctx); } catch {}
+    $('[data-tab="chat"]')?.click();
   });
+  card.querySelector('.cod-note')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      await fetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          description: 'Chart from ' + (card.querySelector('.badge')?.textContent || 'source'),
+          source_url:  url,
+          image_url:   card.querySelector('.cod-card-img')?.dataset.orig || card.querySelector('.cod-card-img')?.src || null,
+          kind: 'chart',
+        }),
+      });
+      showSaveStatus?.('Saved to notebook');
+    } catch (err) { console.warn('chart → note failed', err); }
+  });
+  // Swipe to advance — reuse Top-10 setupSwipe but advance our own index.
+  if (typeof setupSwipe === 'function') {
+    try { setupSwipe(card, () => { codIndex++; renderCodDeck(el); }, () => { codIndex++; renderCodDeck(el); }); } catch {}
+  }
 }
 
 // Retained for backwards compatibility but no longer invoked by v2.

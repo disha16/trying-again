@@ -159,25 +159,50 @@ function sourceName(url) {
 }
 
 async function applyInternetFallback(digest, customSections = [], model = 'qwen-plus') {
-  // Respect useExa toggle — this flow is Exa-heavy so skip entirely when off.
+  // Pick search provider: Exa if user has it enabled AND key set; otherwise Tavily.
+  let useExa = false;
   try {
     const storage = require('./storage');
-    if (!(await storage.isExaEnabled())) {
-      console.log('[internet-fallback] useExa=false — skipping Exa-based category fill');
-      return;
-    }
+    useExa = await storage.isExaEnabled();
   } catch {}
-  if (!process.env.EXA_API_KEY) { console.warn('[internet-fallback] EXA_API_KEY not set'); return; }
+  const hasExa    = useExa && !!process.env.EXA_API_KEY;
+  const hasTavily = !!process.env.TAVILY_API_KEY;
+  if (!hasExa && !hasTavily) {
+    console.warn('[internet-fallback] no search provider available (Exa off, no TAVILY_API_KEY) — skipping');
+    return;
+  }
+  console.log(`[internet-fallback] provider=${hasExa ? 'exa' : 'tavily'}`);
 
-  const exa  = new Exa(process.env.EXA_API_KEY);
+  // Tiny shim so the search call below stays uniform regardless of provider.
+  const exa = hasExa ? new Exa(process.env.EXA_API_KEY) : null;
+  async function searchProvider(query, opts = {}) {
+    if (hasExa) {
+      return exa.search(query, opts);
+    }
+    // Tavily fallback — reuse lib/web-search helper, normalise into Exa-shape.
+    const { searchTavily } = require('./web-search');
+    const results = await searchTavily(query, { numResults: opts.numResults });
+    return { results: results.map(r => ({
+      title:         r.title,
+      url:           r.url,
+      snippet:       r.snippet,
+      text:          r.text,
+      image:         r.image,
+      publishedDate: r.publishedDate,
+    })) };
+  }
   const CATS = ['top_today', 'tech', 'us_business', 'india_business', 'global_economies', 'politics', 'everything_else'];
 
-  // Add custom sections with auto-generated queries
+  // Add custom sections with auto-generated queries (use description if present
+  // for sharper Tavily targeting; otherwise fall back to label).
   const customQueries = {};
   for (const s of (customSections || [])) {
     if (!CATS.includes(s.id)) {
       CATS.push(s.id);
-      customQueries[s.id] = `${s.label.toLowerCase()} news today`;
+      const desc = (s.description || '').trim();
+      customQueries[s.id] = desc
+        ? `${s.label.toLowerCase()} news — ${desc}`
+        : `${s.label.toLowerCase()} news today`;
     }
   }
   const QUERIES = { ...CATEGORY_QUERIES, ...customQueries };
@@ -227,7 +252,7 @@ async function applyInternetFallback(digest, customSections = [], model = 'qwen-
       : undefined;
     const includeDomains = cat === 'top_today' ? NEWS_OUTLET_DOMAINS : undefined;
     try {
-      const res = await exa.search(query, {
+      const res = await searchProvider(query, {
         numResults: Math.max(needed * 4, 25),
         category:   'news',
         ...(startPublishedDate ? { startPublishedDate } : {}),

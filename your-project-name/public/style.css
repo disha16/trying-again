@@ -1075,7 +1075,10 @@ code {
    deck uses internally (since TL doesn't swipe through a stack). */
 .tl-deck { display: flex; flex-direction: column; gap: 18px; }
 .tl-deck .deck-card { position: relative; top: auto; left: auto; right: auto; transform: none; opacity: 1; }
-.tl-deck .deck-points { margin: 6px 0 4px; padding-left: 18px; color: var(--muted); font-size: 0.85rem; line-height: 1.55; }
+.tl-deck .deck-points { margin: 6px 0 4px; padding-left: 18px; color: var(--muted); }
+.tl-deck .deck-points li,
+.tl-deck .deck-points li * { font-size: 0.85rem !important; line-height: 1.55 !important; font-weight: 400 !important; font-family: inherit !important; }
+.tl-deck .deck-points li { margin: 0 0 4px; }
 .tl-card {
   position: relative; background: var(--surface);
   border: 1px solid var(--border-light); border-radius: var(--radius);
