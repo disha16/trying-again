@@ -8,7 +8,8 @@
  *   1. Exa            (if EXA_API_KEY is set AND user toggle is on)
  *   2. Tavily         (if TAVILY_API_KEY is set)
  *   3. LangSearch     (if LANGSEARCH_API_KEY is set)
- *   4. SearXNG        (always; defaults to https://searx.be, override via SEARXNG_URL)
+ *   4. SearXNG        (only if SEARXNG_URL is set — most public instances block bots,
+ *                     so this expects a self-hosted instance)
  *   5. Brave Search   (if BRAVE_API_KEY is set)
  *   6. LLM "world knowledge" pseudo-search — ask the LLM to produce N recent-ish
  *      article-style JSON results. No real links, but keeps the pipeline alive
@@ -134,7 +135,8 @@ async function searchSearXNG(query, opts = {}) {
   // SearXNG is a self-hosted/public meta-search engine — no API key required.
   // Defaults to https://searx.be (a long-running public instance). Override via
   // SEARXNG_URL env var (e.g. https://search.brave4u.com or your own host).
-  const base = (process.env.SEARXNG_URL || 'https://searx.be').replace(/\/+$/, '');
+  const base = (process.env.SEARXNG_URL || '').replace(/\/+$/, '');
+  if (!base) throw new Error('SEARXNG_URL not set');
   const params = new URLSearchParams({
     q:        query,
     format:   'json',
@@ -233,9 +235,9 @@ async function search(query, opts = {}) {
     { name: 'exa',        fn: searchExa,        enabled: exaAllowed && !!process.env.EXA_API_KEY },
     { name: 'tavily',     fn: searchTavily,     enabled: !!process.env.TAVILY_API_KEY },
     { name: 'langsearch', fn: searchLangSearch, enabled: !!process.env.LANGSEARCH_API_KEY },
-    // SearXNG is keyless and free to call (best-effort against a public instance);
-    // disable by setting SEARXNG_URL=disabled or any falsy value.
-    { name: 'searxng',    fn: searchSearXNG,    enabled: (process.env.SEARXNG_URL ?? 'https://searx.be') && process.env.SEARXNG_URL !== 'disabled' },
+    // SearXNG is keyless but most public instances block bot/server traffic.
+    // Only enabled when the user supplies their own self-hosted SEARXNG_URL.
+    { name: 'searxng',    fn: searchSearXNG,    enabled: !!process.env.SEARXNG_URL && process.env.SEARXNG_URL !== 'disabled' },
     { name: 'brave',      fn: searchBrave,      enabled: !!process.env.BRAVE_API_KEY  },
   ];
   // If Exa is disabled by the user, auto-enable the LLM pseudo-search fallback
@@ -270,10 +272,13 @@ async function search(query, opts = {}) {
 
 // Convenience: is any real search provider configured?
 function hasRealSearchProvider() {
-  // SearXNG is always usable (keyless, public instance default), so as long as
-  // the user hasn't explicitly disabled it we have at least one real provider.
-  if (process.env.SEARXNG_URL !== 'disabled') return true;
-  return !!(process.env.EXA_API_KEY || process.env.LANGSEARCH_API_KEY || process.env.TAVILY_API_KEY || process.env.BRAVE_API_KEY);
+  return !!(
+    process.env.EXA_API_KEY ||
+    process.env.TAVILY_API_KEY ||
+    process.env.LANGSEARCH_API_KEY ||
+    (process.env.SEARXNG_URL && process.env.SEARXNG_URL !== 'disabled') ||
+    process.env.BRAVE_API_KEY
+  );
 }
 
 module.exports = { search, searchExa, searchLangSearch, searchTavily, searchSearXNG, searchBrave, searchLLM, hasRealSearchProvider, isProviderFailure };
