@@ -18,6 +18,10 @@
       <button class="tab" data-tab="persona">Persona</button>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
+    <button id="darkModeBtn" class="nav-dark" title="Toggle dark mode" aria-label="Toggle dark mode">
+      <svg id="darkIconMoon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="darkIconSun" class="hidden" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+    </button>
     <button id="reportIssueBtn" class="nav-report" title="Report an issue">Report an issue</button>
   </header>
 
@@ -145,6 +149,33 @@
     </div>
     <p class="source-hint">The sender email is in the forwarded email body — look for "From: …" inside the email.</p>
     <ul id="sourceList" class="source-list"></ul>
+
+    <div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
+      <div class="model-group-label" style="margin-bottom:12px">Thought Leadership — sources</div>
+      <p class="meta" style="margin:0 0 10px;">Substacks and long-form newsletters we turn into 1-minute TL;DR cards (most-recent 5 from the last 7 days).</p>
+      <ul id="tlSourceList" class="source-list" style="margin-bottom:10px"></ul>
+      <div class="add-source-row" style="margin-top:6px">
+        <input type="text"  id="newTlSrcName"  placeholder="Label, e.g. Stratechery" />
+        <input type="email" id="newTlSrcEmail" placeholder="Sender email, e.g. ben@stratechery.com" />
+        <input type="url"   id="newTlSrcUrl"   placeholder="Website (optional)" />
+        <button id="addTlSrcBtn" class="btn-primary">Add</button>
+      </div>
+    </div>
+
+    <div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
+      <div class="model-group-label" style="margin-bottom:12px">Chart of the Day — sources</div>
+      <p class="meta" style="margin:0 0 10px;">Pages and Twitter/X accounts we scrape at 3pm. One most-recent chart per source.</p>
+      <ul id="chartSourceList" class="source-list" style="margin-bottom:10px"></ul>
+      <div class="add-source-row" style="margin-top:6px">
+        <input type="text" id="newChartSrcName" placeholder="Label, e.g. Charlie Bilello" />
+        <input type="url"  id="newChartSrcUrl"  placeholder="https://twitter.com/@handle or a page URL" />
+        <select id="newChartSrcKind" class="source-kind">
+          <option value="html">Web page</option>
+          <option value="twitter">Twitter / X</option>
+        </select>
+        <button id="addChartSrcBtn" class="btn-primary">Add</button>
+      </div>
+    </div>
 
     <div class="tab-explainer">
       <div class="tab-explainer-title">How Sources works</div>
@@ -392,29 +423,24 @@
       </div>
     </div>
     <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
-      <div class="model-group-label" style="margin-bottom:12px">Thought Leadership — sources</div>
-      <p class="meta" style="margin:0 0 10px;">Substacks and long-form newsletters we turn into 1-minute TL;DR cards. Add a sender email (what you see in the forwarded email's From: line) and we'll pick these up in the next 3pm run.</p>
-      <ul id="tlSourceList" class="source-list" style="margin-bottom:10px"></ul>
-      <div class="add-source-row" style="margin-top:6px">
-        <input type="text"  id="newTlSrcName"  placeholder="Label, e.g. Stratechery" />
-        <input type="email" id="newTlSrcEmail" placeholder="Sender email, e.g. ben@stratechery.com" />
-        <input type="url"   id="newTlSrcUrl"   placeholder="Website (optional)" />
-        <button id="addTlSrcBtn" class="btn-primary">Add</button>
-      </div>
-    </div>
-
-    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
-      <div class="model-group-label" style="margin-bottom:12px">Chart of the Day — sources</div>
-      <p class="meta" style="margin:0 0 10px;">Pages and Twitter/X accounts we scrape at 3pm to build the chart-of-day carousel. Up to 5 charts total, round-robined across sources.</p>
-      <ul id="chartSourceList" class="source-list" style="margin-bottom:10px"></ul>
-      <div class="add-source-row" style="margin-top:6px">
-        <input type="text" id="newChartSrcName" placeholder="Label, e.g. Charlie Bilello" />
-        <input type="url"  id="newChartSrcUrl"  placeholder="https://twitter.com/@handle or a page URL" />
-        <select id="newChartSrcKind" class="source-kind">
-          <option value="html">Web page</option>
-          <option value="twitter">Twitter / X</option>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <span class="settings-label">Timezone</span>
+          <span class="settings-hint">All dates, deadlines and “Last updated” times render in this zone. The 3pm run is always at 3pm ET server-side.</span>
+        </div>
+        <select id="tzSelect" class="source-kind" style="min-width:220px">
+          <option value="America/New_York">Eastern (ET)</option>
+          <option value="America/Chicago">Central (CT)</option>
+          <option value="America/Denver">Mountain (MT)</option>
+          <option value="America/Los_Angeles">Pacific (PT)</option>
+          <option value="UTC">UTC</option>
+          <option value="Europe/London">London (GMT/BST)</option>
+          <option value="Europe/Paris">Paris / Berlin</option>
+          <option value="Asia/Kolkata">India (IST)</option>
+          <option value="Asia/Singapore">Singapore / Hong Kong</option>
+          <option value="Asia/Tokyo">Tokyo (JST)</option>
+          <option value="Australia/Sydney">Sydney</option>
         </select>
-        <button id="addChartSrcBtn" class="btn-primary">Add</button>
       </div>
     </div>
 

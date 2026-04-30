@@ -1,16 +1,13 @@
 'use strict';
 
 /**
- * Issue-report capture.
+ * Issue-report capture — Supabase only.
  *
- * Writes every report to Supabase (`issue_reports` table) so the user has an
- * audit log, then tries to email drawal@mba2027.hbs.edu via Resend if
- * RESEND_API_KEY is set. The recipient address is never exposed to the client.
+ * Writes every report to the `issue_reports` table (or falls back to
+ * `kv_store` if that table doesn't exist yet). No email path.
  */
 
 const { createClient } = require('@supabase/supabase-js');
-
-const ISSUE_RECIPIENT = 'drawal@mba2027.hbs.edu'; // server-side only, never surface to client
 
 let _client = null;
 function getClient() {
@@ -33,7 +30,7 @@ async function logIssue({ body, userAgent, url }) {
     .select('id, created_at')
     .single();
 
-  if (!error) return data;
+  if (!error) return { ...data, stored: 'issue_reports' };
 
   // Fallback: table doesn't exist yet — write to kv_store so submissions
   // still succeed before supabase-migration-v2.sql is applied.
@@ -50,36 +47,7 @@ async function logIssue({ body, userAgent, url }) {
     .from('kv_store')
     .upsert({ key: id, value: record }, { onConflict: 'key' });
   if (kvErr) throw new Error(`[issue.log.fallback] ${kvErr.message}`);
-  return { id, created_at: createdAt, _fallback: true };
+  return { id, created_at: createdAt, stored: 'kv_store' };
 }
 
-async function emailIssue({ body, userAgent, url, id, createdAt }) {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) return { emailed: false, reason: 'no RESEND_API_KEY configured' };
-
-  const subject = `[Newsletter Digest] Issue reported #${id || ''}`;
-  const text = [
-    `Body:\n${body}`,
-    `URL: ${url || 'n/a'}`,
-    `User-Agent: ${userAgent || 'n/a'}`,
-    `Logged at: ${createdAt || new Date().toISOString()}`,
-  ].join('\n\n');
-
-  const resp = await fetch('https://api.resend.com/emails', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body:    JSON.stringify({
-      from:    process.env.RESEND_FROM || 'Newsletter Digest <onboarding@resend.dev>',
-      to:      [ISSUE_RECIPIENT],
-      subject,
-      text,
-    }),
-  });
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => '');
-    return { emailed: false, reason: `Resend ${resp.status}: ${msg.slice(0,180)}` };
-  }
-  return { emailed: true };
-}
-
-module.exports = { logIssue, emailIssue };
+module.exports = { logIssue };

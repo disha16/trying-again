@@ -216,7 +216,8 @@ async function fetchNewsletterHeadlines() {
       }
       const imageUrls = extractImageUrls(msg);
 
-      const entry = { id, source: meta.name, kind: meta.kind, subject, bodyText, imageUrls, cachedAt: new Date().toISOString() };
+      const internalDate = msg.internalDate ? Number(msg.internalDate) : null;
+      const entry = { id, source: meta.name, kind: meta.kind, subject, bodyText, imageUrls, internalDate, cachedAt: new Date().toISOString() };
       cache[id]   = entry;
       entries.push(entry);
     } catch { /* skip failed fetches */ }
@@ -229,4 +230,58 @@ async function fetchNewsletterHeadlines() {
   return { entries, cacheHits, cacheMisses };
 }
 
-module.exports = { getAuthUrl, handleCallback, fetchNewsletterHeadlines, currentNewsletterWindow };
+/**
+ * Fetch recent Thought Leadership entries over the last N days. Looks only at
+ * emails from sources where kind === 'thought_leadership'. Returns entries
+ * sorted by internalDate descending, ready to be sliced to top 5.
+ */
+async function fetchThoughtLeadership({ days = 7 } = {}) {
+  const auth    = await getAuthenticatedClient();
+  const gmail   = google.gmail({ version: 'v1', auth });
+  const [cache, sources] = await Promise.all([getEmailCache(), getSources()]);
+  const tlSources = sources.filter(s => s.enabled !== false && s.kind === 'thought_leadership' && s.email);
+  if (!tlSources.length) return [];
+
+  const endSec   = Math.floor(Date.now() / 1000);
+  const startSec = endSec - days * 24 * 60 * 60;
+  // Gmail supports OR-ing from: filters. Use email addresses verbatim.
+  const fromClause = tlSources.map(s => `from:${s.email}`).join(' OR ');
+  const q = `(${fromClause}) after:${startSec} before:${endSec}`;
+  console.log(`[gmail-tl] window ${days}d, ${tlSources.length} sources, query: ${q.slice(0,120)}`);
+
+  const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults: 50 });
+  const messages = listRes.data.messages ?? [];
+  if (!messages.length) return [];
+
+  const results = [];
+  await Promise.all(messages.map(async ({ id }) => {
+    if (cache[id]?.bodyText && cache[id].kind === 'thought_leadership') {
+      results.push(cache[id]);
+      return;
+    }
+    try {
+      const res = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+      const msg = res.data;
+      const headers = msg.payload?.headers ?? [];
+      const get = name => headers.find(h => h.name.toLowerCase() === name)?.value ?? '';
+      const from = get('from');
+      const subject = get('subject');
+      const bodyText = extractBodyText(msg);
+      const meta = getSource(from, sources);
+      if (meta.kind !== 'thought_leadership') return;
+      const imageUrls = extractImageUrls(msg);
+      const internalDate = msg.internalDate ? Number(msg.internalDate) : Date.now();
+      const entry = { id, source: meta.name, kind: meta.kind, subject, bodyText, imageUrls, internalDate, cachedAt: new Date().toISOString() };
+      cache[id] = entry;
+      results.push(entry);
+    } catch { /* skip */ }
+  }));
+
+  await setEmailCache(cache);
+  // sort newest first
+  results.sort((a, b) => (b.internalDate || 0) - (a.internalDate || 0));
+  console.log(`[gmail-tl] ${results.length} TL entries in last ${days}d`);
+  return results;
+}
+
+module.exports = { getAuthUrl, handleCallback, fetchNewsletterHeadlines, fetchThoughtLeadership, currentNewsletterWindow };

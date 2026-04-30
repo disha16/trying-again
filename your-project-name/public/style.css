@@ -1190,3 +1190,76 @@ html.hide-images #chartsOfDay { display: none !important; }
   transition: all .15s;
 }
 .btn-secondary:hover { background: var(--surface); border-color: var(--accent-border); }
+
+
+/* ─── Dark mode ──────────────────────────────────────────────────────────── */
+html[data-theme="dark"] {
+  --bg:           #14100E;
+  --surface:      #1E1815;
+  --surface-2:    #251D18;
+  --border:       #3A2E26;
+  --border-light: #2E2520;
+  --accent:       #E89070;
+  --accent-deep:  #F2A286;
+  --accent-soft:  rgba(232,144,112,.16);
+  --accent-border:rgba(232,144,112,.32);
+  --peach-light:  #8A5A40;
+  --peach-mid:    #B97555;
+  --text:         #F5E5D8;
+  --muted:        #A08C7A;
+  --muted-2:      #7A6856;
+  --danger:       #E67463;
+  --shadow-sm:    0 1px 4px rgba(0,0,0,.35), 0 2px 12px rgba(0,0,0,.22);
+  --shadow-md:    0 4px 20px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.30);
+  --shadow-lg:    0 8px 40px rgba(0,0,0,.55), 0 4px 16px rgba(0,0,0,.40);
+}
+html[data-theme="dark"] body {
+  background: linear-gradient(160deg, #14100E 0%, #1A1411 100%);
+}
+html[data-theme="dark"] header {
+  background: rgba(20,16,14,.85);
+  border-bottom-color: var(--border);
+}
+html[data-theme="dark"] .deck-card-inner,
+html[data-theme="dark"] .tl-card-inner,
+html[data-theme="dark"] .cod-card,
+html[data-theme="dark"] .wk-modal,
+html[data-theme="dark"] .source-item,
+html[data-theme="dark"] input,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select,
+html[data-theme="dark"] .cache-row {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+html[data-theme="dark"] .news-desc,
+html[data-theme="dark"] .meta,
+html[data-theme="dark"] .settings-hint,
+html[data-theme="dark"] .source-hint {
+  color: var(--muted);
+}
+html[data-theme="dark"] .deck-sig {
+  color: var(--muted);
+}
+
+/* Dark-mode toggle button in nav */
+.nav-dark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-right: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s ease, transform .15s ease;
+}
+.nav-dark:hover {
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+}
+html[data-theme="dark"] .nav-dark { color: var(--accent-deep); }

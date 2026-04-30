@@ -124,7 +124,7 @@ Each item: { "headline": "...", "description": "...", "source": "<comma-separate
 CRITICAL RULES:
 - Use EVERY cluster you are given. Do not drop clusters because they don't match your taste — every cluster must appear in EXACTLY ONE section.
 - Use the cluster's headline as-is (they are already factual and non-editorial)
-- description: 2-3 sentences, 80-220 chars total. Sentence 1: what happened and who. Sentence 2: why it matters or the key number/outcome. Sentence 3 (optional): what to watch next. Neutral tone — no hype, no editorial opinion.
+- description: 2-4 complete sentences, 120-320 chars total. Sentence 1: what happened and who. Sentence 2: why it matters or the key number/outcome. Sentences 3-4 (optional): what to watch next and any relevant context. End every sentence with proper punctuation — NEVER leave a thought trailing or unfinished. Neutral tone — no hype, no editorial opinion.
 - source field: list all sources from the cluster, comma-separated
 - Headlines under 120 chars
 

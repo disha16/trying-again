@@ -278,8 +278,7 @@ app.post('/api/feedback', async (req, res) => {
 // Powers the Settings → "Last run cache" panel, so the user can see exactly
 // which digests are currently cached and when each was generated.
 
-// ─── Report an issue (logs to Supabase, emails drawal@mba2027.hbs.edu) ─────────
-// The recipient email is NEVER sent to the client.
+// ─── Report an issue — Supabase-only ──────────────────────────────────────
 app.post('/api/report-issue', async (req, res) => {
   try {
     const body = String(req.body?.body || '').trim();
@@ -288,9 +287,7 @@ app.post('/api/report-issue', async (req, res) => {
     const userAgent = req.get('user-agent') || null;
     const url       = String(req.body?.url || '').slice(0, 500) || null;
     const logged    = await issueReports.logIssue({ body, userAgent, url });
-    const emailed   = await issueReports.emailIssue({ body, userAgent, url, id: logged.id, createdAt: logged.created_at })
-      .catch(e => ({ emailed: false, reason: e.message }));
-    res.json({ ok: true, id: logged.id, emailed: !!emailed.emailed });
+    res.json({ ok: true, id: logged.id, stored: logged.stored });
   } catch (e) {
     console.error('[report-issue]', e.message);
     res.status(500).json({ error: e.message });
@@ -731,19 +728,22 @@ async function runDigestSSE(req, res) {
     // ── Background enrichment (doesn't block SSE response) ──────────────────
     const enrichAsync = async () => {
       try {
-        // Build Thought Leadership deck from this run's entries tagged as TL.
-        // Dedupe against what's already been read so fresh refreshes drop items
-        // the user has swiped through.
+        // Thought Leadership: separate Gmail fetch over the last 7 days,
+        // restricted to sources tagged kind='thought_leadership'. Sort newest
+        // first, drop anything already read, take up to 5.
         try {
-          const tlEntries = entries.filter(e => e.kind === 'thought_leadership');
+          const tlEntries = await gmail.fetchThoughtLeadership({ days: 7 });
           if (tlEntries.length) {
             const alreadyRead = await thoughtLeadership.getReadTLIds();
-            const tlCards = await thoughtLeadership.buildThoughtLeadershipDeck(
-              tlEntries, digestModel, alreadyRead
-            );
-            if (tlCards.length) {
-              digest.thought_leadership = tlCards;
-              console.log(`[cron/digest] thought leadership: ${tlCards.length} cards`);
+            const fresh = tlEntries.filter(e => !alreadyRead.has(`tl:${e.id}`)).slice(0, 5);
+            if (fresh.length) {
+              const tlCards = await thoughtLeadership.buildThoughtLeadershipDeck(
+                fresh, digestModel, new Set() // already filtered above
+              );
+              if (tlCards.length) {
+                digest.thought_leadership = tlCards;
+                console.log(`[cron/digest] thought leadership: ${tlCards.length} cards (from last 7d)`);
+              }
             }
           }
         } catch (e) { console.warn('[cron/digest] thought-leadership error:', e.message); }
@@ -842,6 +842,48 @@ app.get('/api/cron/digest', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   return runDigestSSE(req, res);
+});
+
+// ─── Admin migrate ─ creates issue_reports + indexes on demand ───────────
+const ADMIN_MIGRATE_SQL = `
+create table if not exists issue_reports (
+  id          bigserial primary key,
+  body        text not null,
+  user_agent  text,
+  url         text,
+  created_at  timestamptz not null default now()
+);
+alter table issue_reports disable row level security;
+create index if not exists read_stories_read_at_idx on read_stories (read_at);
+create index if not exists digest_cache_ran_at_idx on digest_cache (ran_at);
+`;
+app.get('/api/admin/migrate', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && req.query.secret !== cronSecret) return res.status(401).json({ error: 'Unauthorized' });
+  const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return res.status(500).json({ error: 'Supabase env missing' });
+
+  // Supabase exposes the Postgres REST but not raw DDL. We use the optional
+  // pg connection string if present (Vercel envs: DATABASE_URL / POSTGRES_URL /
+  // SUPABASE_DB_URL). If none are set we print the SQL for manual copy.
+  const pgUrl = process.env.SUPABASE_DB_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL;
+  if (!pgUrl) {
+    return res.json({
+      ok: false,
+      note: 'No Postgres connection string env var (SUPABASE_DB_URL / POSTGRES_URL / DATABASE_URL). Paste the SQL below into Supabase SQL editor.',
+      sql: ADMIN_MIGRATE_SQL,
+    });
+  }
+  try {
+    const { Client } = require('pg');
+    const c = new Client({ connectionString: pgUrl, ssl: { rejectUnauthorized: false } });
+    await c.connect();
+    await c.query(ADMIN_MIGRATE_SQL);
+    await c.end();
+    res.json({ ok: true, applied: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, sql: ADMIN_MIGRATE_SQL });
+  }
 });
 
 // ─── Browser-initiated digest run (no auth required — Gmail tokens are the gate) ─

@@ -68,6 +68,7 @@ const DEFAULT_SETTINGS = {
   chatModel:        'llama-3.3-70b-versatile',
   internetFallback: true,
   showImages:       true,  // admin-only: when false, skip image fetch + chart-of-day
+  timezone:         'America/New_York', // default ET; overridden in Settings
 };
 const getSettings = () => getKey('settings').then(v => ({ ...DEFAULT_SETTINGS, ...(v ?? {}) }));
 const setSettings = s  => setKey('settings', s);

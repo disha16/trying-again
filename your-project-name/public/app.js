@@ -1,5 +1,60 @@
 /* ── Utility ── */
 const $ = sel => document.querySelector(sel);
+
+// ─── Source name prettifier ────────────────────────────────────────────────
+// Turns "telegraphindia" into "Telegraph India", "newsvent" into "Newsvent",
+// "wsj" stays "WSJ", known outlets get canonical names.
+const SOURCE_OVERRIDES = {
+  'wsj': 'WSJ', 'ft': 'FT', 'nyt': 'NYT', 'ap': 'AP', 'afp': 'AFP',
+  'bbc': 'BBC', 'cnn': 'CNN', 'cnbc': 'CNBC', 'nbc': 'NBC', 'abc': 'ABC',
+  'telegraphindia': 'Telegraph India',
+  'moneycontrol': 'Moneycontrol',
+  'livemint': 'Mint',
+  'nikkei': 'Nikkei',
+  'reuters': 'Reuters',
+  'bloomberg': 'Bloomberg',
+  'techcrunch': 'TechCrunch',
+  'theverge': 'The Verge',
+  'substack': 'Substack',
+};
+function prettifySource(s) {
+  if (!s || typeof s !== 'string') return s || '';
+  if (s.includes(',')) return s.split(',').map(prettifySource).join(', ');
+  const raw = s.trim();
+  const key = raw.toLowerCase().replace(/[^a-z]/g, '');
+  if (SOURCE_OVERRIDES[key]) return SOURCE_OVERRIDES[key];
+  // If it's already Mixed Case (has a lowercase letter and uppercase letter), leave it alone
+  if (/[a-z]/.test(raw) && /[A-Z]/.test(raw)) return raw;
+  // Split ChamelCase or joinedlowercase: "telegraphindia" → "Telegraph India"
+  return raw
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+// ─── Timezone + date/time formatting ────────────────────────────────────────
+// Defaults to America/New_York (ET). Overridden by user Settings → Timezone.
+let USER_TZ = localStorage.getItem('userTz') || 'America/New_York';
+window.setUserTz = (tz) => { USER_TZ = tz || 'America/New_York'; try { localStorage.setItem('userTz', USER_TZ); } catch {} };
+function fmtDT(dt, opts) {
+  const d = dt instanceof Date ? dt : new Date(dt);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-US', { timeZone: USER_TZ, ...(opts || {}) });
+}
+function tzAbbr() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: USER_TZ, timeZoneName: 'short' }).formatToParts(new Date());
+    return (parts.find(p => p.type === 'timeZoneName') || {}).value || '';
+  } catch { return ''; }
+}
+function localDateKey(d) {
+  const s = fmtDT(d, { year:'numeric', month:'2-digit', day:'2-digit' }); // "MM/DD/YYYY"
+  const [mm, dd, yyyy] = s.split(/[/\-]/);
+  return `${yyyy}-${mm}-${dd}`;
+}
 const $$ = sel => [...document.querySelectorAll(sel)];
 
 /* ── State ── */
@@ -48,10 +103,8 @@ function renderDigest(data) {
 
   const date = data.date || '—';
   $('#digestTitle').innerHTML = `<em>today's digest</em> <span class="digest-date-label">— ${date}</span>`;
-  const ran = data.ranAt
-    ? new Date(data.ranAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : '';
-  $('#digestMeta').textContent = ran ? `Last updated: ${ran}` : '';
+  const ran = data.ranAt ? fmtDT(data.ranAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  $('#digestMeta').textContent = ran ? `Last updated: ${ran} ${tzAbbr()}` : '';
 
   renderInnerTabs(data);
   renderCategory(currentCat);
@@ -237,10 +290,10 @@ function renderDeck() {
   const stackHtml = deckItems.slice(deckIndex, deckIndex + 3).map((item, offset) => {
     const isActive = offset === 0;
     const url      = item.internetSource ? item.sourceUrl : sourceMap[item.source];
-    const webTag   = item.internetSource ? `<span class="badge badge-web">🌐 Web</span> ` : '';
+    const srcName  = prettifySource(item.source);
     const badge    = url
-      ? `${webTag}<a class="badge badge-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(item.source)}</a>`
-      : `${webTag}<span class="badge">${esc(item.source)}</span>`;
+      ? `<a class="badge badge-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(srcName)}</a>`
+      : `<span class="badge">${esc(srcName)}</span>`;
     return `
     <div class="deck-card ${isActive ? 'deck-active' : ''}" style="--offset:${offset}">
       <div class="deck-card-inner">
@@ -248,10 +301,10 @@ function renderDeck() {
         <span class="deck-counter">${deckIndex + 1} / ${deckItems.length}</span>
         <div class="deck-feedback-top">
           <button class="deck-feedback-mini deck-up"   aria-label="Good story" title="Good story" data-vote="up">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 1.314C12.438-3.248 23.534 4.735 8 15-7.534 4.736 3.562-3.248 8 1.314z"/></svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.63-10.1-9.25C.17 8.82 1.9 5.5 5.1 5.5c1.94 0 3.48 1.04 4.4 2.55h1c.92-1.51 2.46-2.55 4.4-2.55 3.2 0 4.93 3.32 3.2 6.25C19.5 16.37 12 21 12 21z"/></svg>
           </button>
           <button class="deck-feedback-mini deck-down" aria-label="Not for me"  title="Not for me"  data-vote="down">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 14s-5.5-3.2-5.5-7.2A3 3 0 0 1 8 4.4a3 3 0 0 1 5.5 2.4C13.5 10.8 8 14 8 14z"/></svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.63-10.1-9.25C.17 8.82 1.9 5.5 5.1 5.5c1.94 0 3.48 1.04 4.4 2.55h1c.92-1.51 2.46-2.55 4.4-2.55 3.2 0 4.93 3.32 3.2 6.25C19.5 16.37 12 21 12 21zm-1-12.8-1.6 2.05 2.4 1.75-2 1.1 1.8 2.5-1.45 1.05L8.5 13.3l-2.1 1.2 2.6-3.7-2.4-1.7 4.4-.9z"/></svg>
           </button>
         </div>
         ${item.image ? `<img class="deck-image" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
@@ -452,10 +505,10 @@ function renderMiniDeck(clusterId) {
 
   const stack = items.slice(index, index + 3).map((item, offset) => {
     const isActive = offset === 0;
+    const srcName = prettifySource(item.source);
     const badge = item.sourceUrl
-      ? `<a class="badge badge-link" href="${esc(item.sourceUrl)}" target="_blank" rel="noopener">${esc(item.source)}</a>`
-      : `<span class="badge">${esc(item.source)}</span>`;
-    const webTag = item.internetSource ? `<span class="badge badge-web">🌐 Web</span>` : '';
+      ? `<a class="badge badge-link" href="${esc(item.sourceUrl)}" target="_blank" rel="noopener">${esc(srcName)}</a>`
+      : `<span class="badge">${esc(srcName)}</span>`;
     return `
       <div class="mini-card ${isActive ? 'mini-active' : ''}" style="--offset:${offset}">
         <div class="mini-inner">
@@ -464,7 +517,7 @@ function renderMiniDeck(clusterId) {
             <div class="mini-headline">${esc(item.headline)}</div>
             ${item.description ? `<div class="mini-desc">${esc(item.description)}</div>` : ''}
             <div class="mini-footer">
-              <div class="mini-badges">${webTag}${badge}</div>
+              <div class="mini-badges">${badge}</div>
               <button class="deck-btn mini-skip" title="Next">→</button>
             </div>
           </div>
@@ -617,6 +670,12 @@ async function loadModel() {
   const imgToggle = $('#showImagesToggle');
   if (imgToggle) imgToggle.checked = s.showImages !== false;
   applyImagesPreference(s.showImages !== false);
+  const tzSel = $('#tzSelect');
+  if (tzSel) {
+    const serverTz = s.timezone || USER_TZ;
+    tzSel.value = [...tzSel.options].some(o => o.value === serverTz) ? serverTz : 'America/New_York';
+    window.setUserTz(tzSel.value);
+  }
 }
 
 function showSaveStatus(text) {
@@ -654,6 +713,15 @@ $('#showImagesToggle')?.addEventListener('change', async e => {
   });
   showSaveStatus(show ? 'Images on' : 'Images & chart off');
 });
+$('#tzSelect')?.addEventListener('change', async e => {
+  window.setUserTz(e.target.value);
+  await fetch('/api/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ timezone: e.target.value }),
+  });
+  if (digestData) renderDigest(digestData); // refresh timestamps in the UI
+});
 $('#internetFallbackToggle')?.addEventListener('change', async e => {
   await fetch('/api/settings', {
     method:  'POST',
@@ -671,8 +739,7 @@ async function loadCacheIndex() {
     const list = await fetch('/api/cache-index').then(r => r.json());
     if (!Array.isArray(list) || !list.length) { el.innerHTML = '<p class="meta">No cached digests yet.</p>'; return; }
     const rows = list.map(r => {
-      const ran = new Date(r.ranAt);
-      const when = ran.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+      const when = fmtDT(r.ranAt, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
       const badge = r.enriched
         ? '<span class="cache-badge cache-enriched">enriched</span>'
         : '<span class="cache-badge cache-core">core only</span>';
@@ -872,7 +939,7 @@ async function sendChat() {
 async function loadInboxStatus() {
   const info = await fetch('/last-inbox').then(r => r.json()).catch(() => null);
   if (info?.fetchedAt) {
-    const ago = new Date(info.fetchedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const ago = fmtDT(info.fetchedAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     $('#inboxSyncLabel').textContent = `${info.count} emails synced · ${ago}`;
     $('#inboxSyncBadge').classList.remove('hidden');
   }
@@ -909,7 +976,7 @@ async function loadReadMap() {
         <div class="cluster-item">
           <div class="news-body">
             <span class="news-headline">${esc(row.headline)}</span>
-            <span class="news-desc">${new Date(row.read_at).toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+            <span class="news-desc">${fmtDT(row.read_at, { hour: 'numeric', minute: '2-digit' })}</span>
           </div>
         </div>`).join('')}
     </div>`).join('');
@@ -953,13 +1020,6 @@ function enrichDigestWithClusters(data) {
 }
 
 /* ── Date rolodex ── */
-function localDateKey(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 async function loadDateRolodex() {
   const el = $('#dateRolodex');
   if (!el) return;
@@ -973,7 +1033,7 @@ async function loadDateRolodex() {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const key       = localDateKey(d);
-    const label     = i === 0 ? 'Today' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const label     = i === 0 ? 'Today' : fmtDT(d, { month: 'short', day: 'numeric' });
     const hasDigest = !!history[key];
     const isToday   = i === 0;
     days.push({ key, label, hasDigest, isToday });
@@ -1225,7 +1285,7 @@ function renderNoteSimilarDeck(noteId) {
             <div class="mini-headline">${esc(item.headline)}</div>
             ${item.description ? `<div class="mini-desc">${esc(item.description)}</div>` : ''}
             <div class="mini-footer">
-              <div class="mini-badges"><span class="badge badge-web">🌐 Web</span>${badge}</div>
+              <div class="mini-badges">${badge}</div>
               <button class="deck-btn ns-skip" title="Next">→</button>
             </div>
           </div>
@@ -2076,6 +2136,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Expose for manual replay (e.g. from future Help link)
   window._openWalkthrough = open;
+
+  // Dark-mode toggle wiring
+  (function initDarkMode() {
+    const stored = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const initial = stored || (prefersDark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', initial);
+    const moon = document.getElementById('darkIconMoon');
+    const sun  = document.getElementById('darkIconSun');
+    const setIcons = (t) => {
+      if (!moon || !sun) return;
+      if (t === 'dark') { moon.classList.add('hidden'); sun.classList.remove('hidden'); }
+      else              { sun.classList.add('hidden'); moon.classList.remove('hidden'); }
+    };
+    setIcons(initial);
+    document.getElementById('darkModeBtn')?.addEventListener('click', () => {
+      const cur  = document.documentElement.getAttribute('data-theme') || 'light';
+      const next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('theme', next); } catch {}
+      setIcons(next);
+    });
+  })();
 
   // Report-an-issue wiring
   const issueModal = document.getElementById('issueModal');

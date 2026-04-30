@@ -55,10 +55,11 @@ async function scrapeHtmlPage(source) {
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const html = await resp.text();
 
+  // v2 contract: one most-recent chart per source, then stop.
   const charts = [];
   const figureRe = /<figure[^>]*>([\s\S]*?)<\/figure>/gi;
   let fm;
-  while ((fm = figureRe.exec(html)) !== null && charts.length < (source.limit || 2)) {
+  while ((fm = figureRe.exec(html)) !== null && charts.length < 1) {
     const block = fm[1];
     const imgMatch = block.match(/<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/i)
                   || block.match(/<img[^>]+srcset=["']([^"',\s]+)/i);
@@ -84,7 +85,7 @@ async function scrapeHtmlPage(source) {
   if (!charts.length) {
     const imgRe = /<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["'][^>]*alt=["']([^"']*)["']/gi;
     let im;
-    while ((im = imgRe.exec(html)) !== null && charts.length < (source.limit || 2)) {
+    while ((im = imgRe.exec(html)) !== null && charts.length < 1) {
       if (/logo|sprite|avatar|pixel|icon/i.test(im[1])) continue;
       charts.push({
         title:     (im[2] || 'Chart').slice(0, 140),
@@ -123,7 +124,8 @@ async function scrapeTwitter(source) {
       const charts = [];
       const itemRe = /<div class="timeline-item"[^>]*>([\s\S]*?)<div class="tweet-stats/g;
       let fm;
-      while ((fm = itemRe.exec(html)) !== null && charts.length < (source.limit || 2)) {
+      // v2 contract: pick the single most-recent tweet that has an attached image.
+      while ((fm = itemRe.exec(html)) !== null && charts.length < 1) {
         const block = fm[1];
         if (!/class="attachment image"/.test(block) && !/class="attachments"/.test(block)) continue;
         const img = block.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1];
@@ -147,26 +149,21 @@ async function scrapeTwitter(source) {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-async function fetchCharts({ max = 5 } = {}) {
+/**
+ * v2 contract: one most-recent chart per configured source.
+ * Returns in source-order, no interleaving, no arbitrary cap.
+ */
+async function fetchCharts() {
   const sources = await getChartSources();
-  const perSource = [];
+  const out = [];
   for (const s of sources) {
+    if (s.enabled === false) continue;
     try {
       const charts = s.kind === 'twitter' ? await scrapeTwitter(s) : await scrapeHtmlPage(s);
-      perSource.push(charts);
+      if (charts && charts.length) out.push(charts[0]);
     } catch (e) {
       console.warn(`[chart] ${s.name} failed: ${e.message}`);
-      perSource.push([]);
     }
-  }
-  const out = [];
-  let idx = 0;
-  const total = perSource.reduce((n, a) => n + a.length, 0);
-  while (out.length < max && out.length < total) {
-    const arr = perSource[idx % perSource.length];
-    if (arr && arr.length) out.push(arr.shift());
-    idx++;
-    if (idx > max * Math.max(1, perSource.length)) break;
   }
   return out;
 }
@@ -184,7 +181,7 @@ async function getCharts({ dateKey, force = false } = {}) {
       if (cached?.charts?.length) return cached;
     } catch {}
   }
-  const charts  = await fetchCharts({ max: 5 });
+  const charts  = await fetchCharts();
   const payload = { charts, fetchedAt: new Date().toISOString(), dateKey: key };
   try { await storage.setKV(cacheKey, payload); }
   catch (e) { console.warn('[chart] cache write failed:', e.message); }
