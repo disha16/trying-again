@@ -825,8 +825,24 @@ async function runDigestSSE(req, res) {
     send('status', { message: `${entries.length} newsletters (${cacheHits} cached, ${cacheMisses} new). Clustering…` });
 
     console.log('[cron/digest] starting clustering…');
-    const clusters = await clusterer.clusterHeadlines(entries, clusterModel);
+    let clusters = await clusterer.clusterHeadlines(entries, clusterModel);
     console.log(`[cron/digest] clustering done: ${clusters.length} clusters`);
+
+    // ── Source-level read-dedupe: strip already-read sources from clusters; ─
+    // drop any cluster whose every source is already read.
+    try {
+      const pipeline = require('./lib/cluster-pipeline');
+      const sourceReadState = await supa.getSourceReadState(3);
+      clusters = pipeline.dropReadSources(clusters, sourceReadState);
+    } catch (e) { console.warn('[cron/digest] source-dedupe skipped:', e.message); }
+
+    // ── Top up from web if we don't have enough fresh clusters ──────────────
+    // Target 30 so the first 3-4 sections always have real content.
+    try {
+      const pipeline = require('./lib/cluster-pipeline');
+      clusters = await pipeline.topUpFromWeb(clusters, { target: 30, model: digestModel });
+    } catch (e) { console.warn('[cron/digest] web topup skipped:', e.message); }
+
     const _exaOn = settings.useExa === true || settings.showImages === true;
     send('status', { message: _exaOn ? `${clusters.length} unique stories. Fetching article images…` : `${clusters.length} unique stories.` });
     await exaImages.enrichClustersWithImages(clusters, { useExa: _exaOn });

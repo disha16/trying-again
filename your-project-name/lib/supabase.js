@@ -49,6 +49,24 @@ async function getClusterReadState() {
   return state;
 }
 
+/**
+ * Per-source read state: { keyword → Set<source> } for stories read in the
+ * last `days` days. Used by the de-dupe step that strips already-read sources
+ * from clusters before the digest LLM is called.
+ */
+async function getSourceReadState(days = 3) {
+  const history = await getReadHistory(days);
+  const state   = {};
+  for (const row of history) {
+    if (!row.source) continue;
+    for (const kw of (row.cluster_keywords || [])) {
+      if (!state[kw]) state[kw] = new Set();
+      state[kw].add(row.source);
+    }
+  }
+  return state;
+}
+
 // ── Digest cache ──────────────────────────────────────────────────────────────
 // Uses the `digest_cache` table: date_key TEXT primary key, digest JSONB, ran_at TIMESTAMPTZ, enriched BOOLEAN
 
@@ -170,6 +188,7 @@ module.exports = {
   markRead,
   getReadHistory,
   getClusterReadState,
+  getSourceReadState,
   saveDigest,
   getDigest,
   getLatestDigest,
