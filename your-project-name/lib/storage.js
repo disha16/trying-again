@@ -67,7 +67,15 @@ const DEFAULT_SETTINGS = {
   editorModel:      'llama-3.3-70b-versatile',
   chatModel:        'llama-3.3-70b-versatile',
   internetFallback: true,
-  showImages:       true,  // admin-only: when false, skip image fetch + chart-of-day
+  // Master switch for Exa-based web search + image enrichment.
+  // When false (default): no Exa calls anywhere — web search falls back to
+  // the LLM-only path, chart-of-day relies on predefined-source scraping,
+  // and card images are simply omitted.
+  useExa:           false,
+  // Kept for back-compat with older stored settings — mirrors useExa semantics.
+  // Code should read `useExa` going forward and only fall back to showImages
+  // for older serialized records.
+  showImages:       false,
   timezone:         'America/New_York', // default ET; overridden in Settings
 };
 const getSettings = () => getKey('settings').then(v => ({ ...DEFAULT_SETTINGS, ...(v ?? {}) }));
@@ -123,3 +131,14 @@ module.exports = {
   getFeedback, addFeedback,
   getQualityNote, setQualityNote,
 };
+
+
+// ── Derived helper: canonical "is Exa enabled" check ──────────────────────────
+// Reads useExa primarily, falls back to showImages for back-compat.
+// Returns true only if the setting is explicitly truthy.
+async function isExaEnabled() {
+  const s = await getSettings();
+  if (typeof s.useExa === 'boolean') return s.useExa === true;
+  return s.showImages === true;
+}
+module.exports.isExaEnabled = isExaEnabled;

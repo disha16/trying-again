@@ -684,9 +684,12 @@ async function loadModel() {
   }
   const toggle = $('#internetFallbackToggle');
   if (toggle) toggle.checked = s.internetFallback !== false;
-  const imgToggle = $('#showImagesToggle');
-  if (imgToggle) imgToggle.checked = s.showImages !== false;
-  applyImagesPreference(s.showImages !== false);
+  // useExa is the canonical flag. For back-compat we accept `showImages` from
+  // older stored settings; both mirror each other server-side going forward.
+  const exaOn = (typeof s.useExa === 'boolean') ? s.useExa : (s.showImages === true);
+  const exaToggle = $('#useExaToggle');
+  if (exaToggle) exaToggle.checked = exaOn;
+  applyImagesPreference(exaOn);
   const tzSel = $('#tzSelect');
   if (tzSel) {
     const serverTz = s.timezone || USER_TZ;
@@ -720,15 +723,15 @@ for (const id of MODEL_PICKERS) {
 function applyImagesPreference(show) {
   document.documentElement.classList.toggle('hide-images', !show);
 }
-$('#showImagesToggle')?.addEventListener('change', async e => {
-  const show = e.target.checked;
-  applyImagesPreference(show);
+$('#useExaToggle')?.addEventListener('change', async e => {
+  const on = e.target.checked;
+  applyImagesPreference(on);
   await fetch('/api/settings', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ showImages: show }),
+    body:    JSON.stringify({ useExa: on }),
   });
-  showSaveStatus(show ? 'Images on' : 'Images & chart off');
+  showSaveStatus(on ? 'Exa on — next refresh will fetch images & richer web context' : 'Exa off — no card images, no Exa credits used');
 });
 $('#tzSelect')?.addEventListener('change', async e => {
   window.setUserTz(e.target.value);

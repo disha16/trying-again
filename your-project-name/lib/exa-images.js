@@ -36,10 +36,13 @@ async function fetchExaImage(exa, headline) {
 }
 
 async function enrichClustersWithImages(clusters, opts = {}) {
-  // Respect the admin-only "show images & chart" toggle: when off, we skip the
-  // entire image fetch so we don't burn Exa credits fetching assets the user
-  // has chosen to hide.
-  if (opts.showImages === false) { console.log('[exa] images disabled by settings — skipping'); return; }
+  // Master switch: never touch Exa unless the user has explicitly enabled it.
+  let useExa = opts.useExa;
+  if (useExa === undefined) useExa = opts.showImages === true;
+  if (useExa === undefined) {
+    try { useExa = await require('./storage').isExaEnabled(); } catch { useExa = false; }
+  }
+  if (!useExa) { console.log('[exa] images disabled (useExa=false) — skipping'); return; }
 
   const apiKey = process.env.EXA_API_KEY;
   if (!apiKey) { console.warn('[exa] EXA_API_KEY not set — skipping'); return; }

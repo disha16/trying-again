@@ -159,6 +159,14 @@ function sourceName(url) {
 }
 
 async function applyInternetFallback(digest, customSections = [], model = 'qwen-plus') {
+  // Respect useExa toggle — this flow is Exa-heavy so skip entirely when off.
+  try {
+    const storage = require('./storage');
+    if (!(await storage.isExaEnabled())) {
+      console.log('[internet-fallback] useExa=false — skipping Exa-based category fill');
+      return;
+    }
+  } catch {}
   if (!process.env.EXA_API_KEY) { console.warn('[internet-fallback] EXA_API_KEY not set'); return; }
 
   const exa  = new Exa(process.env.EXA_API_KEY);

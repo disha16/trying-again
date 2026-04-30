@@ -121,7 +121,14 @@ app.post('/api/settings', async (req, res) => {
     update[key] = req.body[key];
   }
   if (req.body.internetFallback !== undefined) update.internetFallback = !!req.body.internetFallback;
-  if (req.body.showImages !== undefined) update.showImages = !!req.body.showImages;
+  // Accept either `useExa` or legacy `showImages`; mirror both for back-compat.
+  if (req.body.useExa !== undefined) {
+    update.useExa     = !!req.body.useExa;
+    update.showImages = !!req.body.useExa;
+  } else if (req.body.showImages !== undefined) {
+    update.showImages = !!req.body.showImages;
+    update.useExa     = !!req.body.showImages;
+  }
   if (req.body.persona   !== undefined) update.persona   = req.body.persona;
   if (req.body.sections  !== undefined) update.sections  = req.body.sections;
   if (req.body.anthropicApiKey !== undefined) {
@@ -200,9 +207,9 @@ let chartInFlight = null;
 
 app.get('/api/chart-of-day', async (req, res) => {
   try {
-    // Admin toggle: when showImages is off we never generate or serve charts.
+    // Admin toggle: when useExa is off we never generate or serve charts via Exa.
     const settings0 = await storage.getSettings();
-    if (settings0.showImages === false) return res.status(204).end();
+    if (settings0.useExa !== true && settings0.showImages !== true) return res.status(204).end();
 
     // Accept an optional ?date=YYYY-MM-DD so the date-picker can request a cached run.
     const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
@@ -411,6 +418,7 @@ app.get('/api/notes/:id/similar', async (req, res) => {
   const notes = await storage.getNotes();
   const note  = notes.find(n => n.id == req.params.id);
   if (!note) return res.status(404).json({ error: 'Not found' });
+  if (!(await storage.isExaEnabled())) return res.json({ stories: [] });
   if (!process.env.EXA_API_KEY) return res.json({ stories: [] });
   try {
     const Exa = require('exa-js').default;
@@ -476,6 +484,7 @@ app.post('/api/push-inbox', async (req, res) => {
 // ─── Chat ──────────────────────────────────────────────────────────────────────
 
 async function fetchChatWebContext(query) {
+  if (!(await storage.isExaEnabled())) return '';
   if (!process.env.EXA_API_KEY) return '';
   try {
     const Exa = require('exa-js').default;
@@ -652,8 +661,9 @@ async function runDigestSSE(req, res) {
     console.log('[cron/digest] starting clustering…');
     const clusters = await clusterer.clusterHeadlines(entries, clusterModel);
     console.log(`[cron/digest] clustering done: ${clusters.length} clusters`);
-    send('status', { message: settings.showImages === false ? `${clusters.length} unique stories.` : `${clusters.length} unique stories. Fetching article images…` });
-    await exaImages.enrichClustersWithImages(clusters, { showImages: settings.showImages });
+    const _exaOn = settings.useExa === true || settings.showImages === true;
+    send('status', { message: _exaOn ? `${clusters.length} unique stories. Fetching article images…` : `${clusters.length} unique stories.` });
+    await exaImages.enrichClustersWithImages(clusters, { useExa: _exaOn });
     await storage.setClusters({ clusters, generatedAt: new Date().toISOString() });
     send('status', { message: `${clusters.length} unique stories. Checking read history…` });
 
@@ -766,27 +776,28 @@ async function runDigestSSE(req, res) {
         // Carousel "charts of the day" (Exa-sourced thumbnails in top_today) — skipped
         // entirely when the admin-only Show Images / Chart toggle is off, so we don't
         // burn web-search credits on assets the user has chosen to hide.
-        if (settings.internetFallback && settings.showImages !== false) {
+        if (settings.internetFallback && (settings.useExa === true || settings.showImages === true)) {
           const topHeadlines  = (digest.top_today || []).map(s => s.headline);
           const lastRun2      = await storage.getLastRun();
           const seenChartUrls = new Set((lastRun2?.charts || []).map(c => c.sourceUrl).filter(Boolean));
           digest.charts = await charts.fetchChartsOfDay(topHeadlines, seenChartUrls, digestModel)
             .catch(e => { console.error('[cron/digest] charts error:', e.message); return []; });
-        } else if (settings.showImages === false) {
-          console.log('[cron/digest] showImages=false — skipping charts-of-day carousel');
+        } else {
+          console.log('[cron/digest] useExa=false — skipping charts-of-day carousel');
         }
 
         // Pre-generate "Chart of the Day" (v2: scrapes user-configured predefined
         // sources — NBC economic indicators + Twitter/X accounts — and returns up
-        // to 5 charts). No Exa, no LLM. Respects the admin-only showImages toggle.
-        if (settings.showImages !== false) {
+        // to 5 charts). No Exa, no LLM — this block is Exa-free by design and runs
+        // regardless of the useExa toggle because it only scrapes predefined sources.
+        if (true) {
           try {
             const payload = await chartOfDay.getCharts({ dateKey, force: true });
             digest.chartOfDay = payload;
             console.log(`[cron/digest] chart-of-day v2 cached for ${dateKey} (${payload.charts.length} charts)`);
           } catch (e) { console.error('[cron/digest] chart-of-day v2 prefetch error:', e.message); }
         } else {
-          console.log('[cron/digest] showImages=false — skipping chart-of-day prefetch');
+          console.log('[cron/digest] chart-of-day prefetch skipped');
         }
 
         // 30-day TTL sweep (digest cache, read history, temp KV rows). Feedback

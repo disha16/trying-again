@@ -55,6 +55,10 @@ Return ONLY valid JSON — no markdown:
 Include only approved items. If nothing qualifies, return [].`;
 
 async function fetchChartsOfDay(topHeadlines, seenUrls = new Set(), model = 'llama-3.3-70b-versatile') {
+  try {
+    const storage = require('./storage');
+    if (!(await storage.isExaEnabled())) { console.log('[charts] useExa=false — skipping'); return []; }
+  } catch {}
   if (!process.env.EXA_API_KEY) return [];
 
   const exa = new Exa(process.env.EXA_API_KEY);

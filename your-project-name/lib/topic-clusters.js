@@ -138,7 +138,8 @@ ${webExcerpts ? `WEB EXCERPTS (use only to add missing context — do NOT contra
  * @returns {Promise<Array>}            Array of { topic, summary, image, stories[] }
  */
 async function buildTopicClusters(digest, useInternet, model = 'llama-3.3-70b-versatile') {
-  const topStories = (digest.top_today || []).slice(0, 5);
+  // Reduced from 5 → 3 to minimize Tavily/Brave/Exa usage per digest.
+  const topStories = (digest.top_today || []).slice(0, 3);
   if (!topStories.length) return [];
 
   const canWebSearch = useInternet && hasRealSearchProvider();
@@ -150,9 +151,10 @@ async function buildTopicClusters(digest, useInternet, model = 'llama-3.3-70b-ve
     let webResults = [];
     if (canWebSearch) {
       try {
+        // Reduced from 10 → 5 results per topic to minimize web search usage.
         webResults = await search(topic.slice(0, 100), {
-          numResults:   10,
-          text:         { maxCharacters: 800 },
+          numResults:   5,
+          text:         { maxCharacters: 600 },
           withContents: true,
           category:     'news',
         });

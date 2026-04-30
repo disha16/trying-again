@@ -18,8 +18,17 @@ Rules for each context:
 
 async function enrichTopStories(topStories, model) {
   if (!topStories?.length) return;
+  // Exa master switch — if disabled, we skip the source-excerpt fetch and let
+  // the LLM generate context purely from the headline (which it's already
+  // willing to do).
+  let useExa = false;
+  try { useExa = await require('./storage').isExaEnabled(); } catch {}
   const apiKey = process.env.EXA_API_KEY;
-  if (!apiKey) { console.warn('[enricher] EXA_API_KEY not set — skipping context enrichment'); return; }
+  if (!useExa || !apiKey) {
+    console.log(`[enricher] Exa ${useExa ? 'key missing' : 'disabled by useExa'} — LLM-only context fallback`);
+    const contents = topStories.map(s => ({ headline: s.headline, text: '' }));
+    return runLLMContext(contents, topStories, model);
+  }
 
   const exa = new Exa(apiKey);
 
@@ -39,9 +48,15 @@ async function enrichTopStories(topStories, model) {
     }
   }));
 
-  // Build one batched prompt
+  return runLLMContext(contents, topStories, model);
+}
+
+// Batched LLM call that turns { headline, text } tuples into 1-2 sentence
+// context strings and attaches them to the matching stories in place.
+// `text` may be empty (Exa-off path) — the LLM will then rely on headline alone.
+async function runLLMContext(contents, topStories, model) {
   const prompt = contents.map((c, i) =>
-    `STORY ${i + 1}: ${c.headline}\n${c.text ? `SOURCE EXCERPTS:\n${c.text}` : '(no source content found)'}`
+    `STORY ${i + 1}: ${c.headline}\n${c.text ? `SOURCE EXCERPTS:\n${c.text}` : '(no source content found — use your own knowledge)'}`
   ).join('\n\n===\n\n');
 
   let raw;

@@ -141,12 +141,22 @@ function safeHost(url) {
 }
 
 // Unified search. Tries providers in order; returns the first non-empty response.
+// When opts.useExa is false (or absent and storage.isExaEnabled() returns false),
+// Exa is skipped entirely — fall straight to Tavily/Brave/LLM.
 async function search(query, opts = {}) {
+  let exaAllowed = opts.useExa;
+  if (exaAllowed === undefined) {
+    try { const storage = require('./storage'); exaAllowed = await storage.isExaEnabled(); }
+    catch { exaAllowed = !!process.env.EXA_API_KEY; }
+  }
   const chain = [
-    { name: 'exa',    fn: searchExa,    enabled: !!process.env.EXA_API_KEY  },
+    { name: 'exa',    fn: searchExa,    enabled: exaAllowed && !!process.env.EXA_API_KEY },
     { name: 'tavily', fn: searchTavily, enabled: !!process.env.TAVILY_API_KEY },
     { name: 'brave',  fn: searchBrave,  enabled: !!process.env.BRAVE_API_KEY  },
   ];
+  // If Exa is disabled by the user, auto-enable the LLM pseudo-search fallback
+  // so callers that relied on Exa still get SOMETHING back.
+  if (!exaAllowed && opts.allowLLM === undefined) opts = { ...opts, allowLLM: true };
   let lastErr;
   for (const { name, fn, enabled } of chain) {
     if (!enabled) continue;
