@@ -2193,14 +2193,17 @@ $('#trainerGenBtn')?.addEventListener('click', async () => {
   }
 });
 
-$('#trainerApproveBtn')?.addEventListener('click', async () => {
+// Auto-save feedback as the user types (debounced 1.2s; also on blur).
+// No more Approve gate — everything queues for the 2:30pm rolling compact.
+let _trainerSaveTimer = null;
+let _trainerLastSavedText = '';
+async function _trainerAutoSave(force = false) {
   if (!trainerSyntheticIn || !trainerPersonaOut) return;
   const feedback = $('#trainerFeedback').value.trim();
-
-  const btn = $('#trainerApproveBtn');
-  btn.disabled = true;
-  btn.textContent = 'Saving…';
-
+  if (!feedback) return;
+  if (!force && feedback === _trainerLastSavedText) return;
+  const status = $('#trainerSaveStatus');
+  if (status) status.textContent = 'Saving…';
   try {
     const res = await fetch(`/api/train/${trainerPersona}/feedback`, {
       method:  'POST',
@@ -2212,29 +2215,29 @@ $('#trainerApproveBtn')?.addEventListener('click', async () => {
         approvedOutput:  trainerPersonaOut,
       }),
     }).then(r => r.json());
-
-    const msg = res.rules?.length
-      ? `Saved! ${res.totalExamples} examples total. ${res.rules.length} rules distilled.`
-      : `Saved! ${res.totalExamples} examples total.`;
-    showTrainerStatus(msg, 'success');
-    trainerSyntheticIn = null;
-    trainerPersonaOut  = null;
-    $('#trainerScenario').classList.add('hidden');
-    loadTrainerState();
+    _trainerLastSavedText = feedback;
+    if (status) status.textContent = `Saved · ${res.totalExamples || 0} examples queued for the 2:30pm compact`;
   } catch (e) {
-    showTrainerStatus(`Error: ${e.message}`, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '✓ Approve & Save';
+    if (status) status.textContent = `Save failed: ${e.message}`;
   }
+}
+$('#trainerFeedback')?.addEventListener('input', () => {
+  clearTimeout(_trainerSaveTimer);
+  _trainerSaveTimer = setTimeout(() => _trainerAutoSave(false), 1200);
+});
+$('#trainerFeedback')?.addEventListener('blur', () => _trainerAutoSave(true));
+
+// New 'Generate new scenario' button: flush feedback then regenerate.
+$('#trainerRegenerateBtn')?.addEventListener('click', async () => {
+  await _trainerAutoSave(true).catch(() => {});
+  _trainerLastSavedText = '';
+  $('#trainerFeedback').value = '';
+  $('#trainerGenerateBtn')?.click();
 });
 
-$('#trainerRejectBtn')?.addEventListener('click', () => {
-  trainerSyntheticIn = null;
-  trainerPersonaOut  = null;
-  $('#trainerScenario').classList.add('hidden');
-  showTrainerStatus('Rejected. Generate a new scenario to try again.', 'error');
-});
+// Legacy handlers (kept as no-op so any cached old DOM doesn't error out).
+$('#trainerApproveBtn')?.addEventListener('click', () => _trainerAutoSave(true));
+$('#trainerRejectBtn')?.addEventListener('click', () => $('#trainerRegenerateBtn')?.click());
 
 function showTrainerStatus(msg, type = 'success') {
   const el = $('#trainerStatus');

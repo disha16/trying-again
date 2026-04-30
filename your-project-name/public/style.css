@@ -124,7 +124,7 @@ header {
   font-family: inherit;
   font-style: normal;
 }
-/* ── All tab section headers share the same elegant style ── */
+/* (Duplicate of the rule above — kept harmless inheritance below if anything) */
 .tab-content > h2,
 .tab-content > div > h2,
 .nb-header h2,
@@ -397,7 +397,7 @@ a.badge-link:hover {
   gap: 16px;
   margin-bottom: 4px;
 }
-.chat-header-row h2 { font-size: 1.2rem; margin-bottom: 4px; }
+.chat-header-row h2 { margin-bottom: 4px; } /* font-size set by unified tab h2 rule above */
 
 .inbox-sync-badge {
   display: flex;

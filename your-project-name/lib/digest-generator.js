@@ -19,7 +19,8 @@ const ANTHROPIC_MODELS = [
   'claude-opus-4-5-20251101',
 ];
 const CLI_MODELS       = ['claude-cli'];
-const ALL_MODELS       = [...CLI_MODELS, ...ANTHROPIC_MODELS, ...GROQ_MODELS, ...DEEPSEEK_MODELS, ...QWEN_MODELS];
+const MANUS_MODELS     = ['manus'];
+const ALL_MODELS       = [...CLI_MODELS, ...MANUS_MODELS, ...ANTHROPIC_MODELS, ...GROQ_MODELS, ...DEEPSEEK_MODELS, ...QWEN_MODELS];
 
 // Resolve Anthropic API key: prefer settings (UI input) over env var
 async function getAnthropicKey() {
@@ -264,6 +265,16 @@ const SYSTEM = buildSystemPrompt();
 // Direct single-provider dispatch (no fallback). Use _callModel for safe calls with fallback.
 async function _callModelDirect(model, prompt, systemOverride) {
   const sys = systemOverride || SYSTEM;
+  if (model === 'manus') {
+    const { callManus, hasManusKey } = require('./manus');
+    if (!hasManusKey()) {
+      const err = new Error('Manus selected but MANUS_API_KEY env var not set');
+      err.status = 401;
+      throw err;
+    }
+    console.log('[digest] model: manus (agent task)');
+    return callManus(sys, prompt);
+  }
   if (model === 'claude-cli') {
     console.log('[digest] model: claude-cli (subprocess)');
     let lastErr;
@@ -451,4 +462,4 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
   return digest;
 }
 
-module.exports = { generateDigest, buildSystemPrompt, getClient, callClaudeCLI, callAnthropic, _callModel, ALL_MODELS, CLI_MODELS, ANTHROPIC_MODELS, GROQ_MODELS, DEEPSEEK_MODELS, QWEN_MODELS };
+module.exports = { generateDigest, buildSystemPrompt, getClient, callClaudeCLI, callAnthropic, _callModel, ALL_MODELS, CLI_MODELS, MANUS_MODELS, ANTHROPIC_MODELS, GROQ_MODELS, DEEPSEEK_MODELS, QWEN_MODELS };

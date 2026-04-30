@@ -302,7 +302,7 @@
         </svg>
       </div>
       <div class="prototype-notice-body">
-        <div class="prototype-notice-title">Prototype: this digest uses dummy images</div>
+        <div class="prototype-notice-title">Prototype: this digest may use dummy images</div>
         <div class="prototype-notice-text">The production version can be viewed by turning on <strong>Exa</strong> in <em>Admin-only settings</em> and refreshing the digest. Please only do this for your final viewing of the prototype.</div>
       </div>
     </div>
@@ -331,6 +331,9 @@
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
           </optgroup>
+          <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
+            <option value="manus">Manus</option>
+          </optgroup>
 
         </select>
       </div>
@@ -356,6 +359,9 @@
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
           </optgroup>
+          <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
+            <option value="manus">Manus</option>
+          </optgroup>
 
         </select>
       </div>
@@ -380,6 +386,9 @@
             <option value="qwen-max">Qwen Max</option>
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
+          </optgroup>
+          <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
+            <option value="manus">Manus</option>
           </optgroup>
 
         </select>
@@ -409,6 +418,9 @@
             <option value="qwen-max">Qwen Max</option>
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
+          </optgroup>
+          <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
+            <option value="manus">Manus</option>
           </optgroup>
 
         </select>
@@ -561,11 +573,11 @@
         </div>
 
         <div class="trainer-feedback-wrap">
-          <label class="trainer-feedback-label">Your feedback — what should the persona do differently?</label>
+          <label class="trainer-feedback-label">Your feedback <span class="settings-hint" style="font-weight:400">— saved automatically as you type; compacted nightly at 2:30pm</span></label>
           <textarea id="trainerFeedback" class="trainer-feedback-input" rows="3" placeholder="e.g. 'The editor should have removed the Nucor story from us_business — it's not important enough. Stories should always be ranked by macro impact first.'"></textarea>
           <div class="trainer-feedback-actions">
-            <button id="trainerApproveBtn" class="btn-primary">✓ Approve & Save</button>
-            <button id="trainerRejectBtn" class="btn-secondary">✗ Reject (regenerate)</button>
+            <span id="trainerSaveStatus" class="settings-hint" style="flex:1"></span>
+            <button id="trainerRegenerateBtn" class="btn-secondary">↻ Generate new scenario</button>
           </div>
         </div>
       </div>

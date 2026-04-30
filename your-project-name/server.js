@@ -231,11 +231,10 @@ app.post('/api/settings', async (req, res) => {
   }
   const current = await storage.getSettings();
   await storage.setSettings({ ...current, ...update });
-  // If persona quiz changed, recompact rolling preferences in the background
-  if (req.body.persona !== undefined) {
-    try { require('./lib/preferences').recompact('persona-quiz').catch(e => console.warn('[preferences] persona-quiz recompact failed:', e.message)); }
-    catch (e) { console.warn('[preferences] persona-quiz hook failed:', e.message); }
-  }
+  // Note: rolling preferences are no longer recompacted on each save.
+  // The daily 2:30pm cron does a single bounded compact across ALL signals
+  // (persona quiz + trainer feedback + thumbs feedback) so the loop is simpler
+  // and we can't trigger a recompact storm from rapid clicks.
   res.json({ success: true });
 });
 
@@ -1230,9 +1229,8 @@ app.post('/api/train/:persona/feedback', async (req, res) => {
     // Distill rules after every 3 examples
     let rules = data.rules || [];
     if (data.examples.length % 3 === 0) rules = await trainer.distillRules(persona, model);
-    // Recompact rolling preferences whenever a trainer example is approved
-    try { require('./lib/preferences').recompact('trainer-approve').catch(e => console.warn('[preferences] trainer recompact failed:', e.message)); }
-    catch (e) { console.warn('[preferences] trainer hook failed:', e.message); }
+    // Trainer feedback is now auto-saved as the user types and queued for the
+    // daily 2:30pm rolling-preferences compact — no per-event recompact here.
     res.json({ saved: true, totalExamples: data.examples.length, rules });
   } catch (e) {
     console.error(`[trainer/${persona}] feedback error:`, e.message);
