@@ -1,6 +1,35 @@
 /* ── Utility ── */
 const $ = sel => document.querySelector(sel);
 
+// ─── Image fallback helper ────────────────────────────────────────────────
+// When a card image 404s or is blocked by hot-link protection (common with
+// imgix/Substack/The Information), swap it for a deterministic unDraw SVG so
+// the card never renders empty whitespace. Same input key → same illustration.
+(function setupImgFallback() {
+  const CDN = 'https://cdn.jsdelivr.net/gh/balazser/undraw-svg-collection@main/svgs';
+  const SLUGS = [
+    'business-deal','business-decisions','business-plan','business-analytics',
+    'finance','financial-data','investment','investing','invest',
+    'investor-update','revenue','stocks-rising','startup-life','savings',
+    'data-trends','data-report','data-points','data-processing',
+    'analytics','growth-analytics','dashboard','charts','growth-chart','growth-curve',
+    'happy-news','exciting-news','breaking-barriers','press-play','newspaper',
+    'reading-time','reading','ideas-flow','forming-ideas','ideation','ideas',
+    'launch-day','launching','in-the-office','engineering-team',
+    'design-team','marketing','product-tour','product-iteration',
+    'meeting','team-spirit','team-collaboration','connecting-teams',
+    'world','progress-overview','progress-data','metrics','visionary-technology',
+  ];
+  function hash(s) { let h = 2166136261; s = String(s || 'x'); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  window.__imgFallback = function (el, key) {
+    if (!el || el.dataset.fellBack === '1') { if (el) el.style.display = 'none'; return; }
+    el.dataset.fellBack = '1';
+    el.src = CDN + '/' + SLUGS[hash(key || el.alt || el.src) % SLUGS.length] + '.svg';
+    el.style.objectFit = 'contain';
+    el.style.background = 'var(--surface, #fafafa)';
+  };
+})();
+
 // ─── Source name prettifier ────────────────────────────────────────────────
 // Turns "telegraphindia" into "Telegraph India", "newsvent" into "Newsvent",
 // "wsj" stays "WSJ", known outlets get canonical names.
@@ -207,7 +236,7 @@ function renderThoughtLeadership(cards) {
     return `
       <div class="deck-card deck-active tl-deck-card" style="--offset:0">
         <div class="deck-card-inner">
-          ${c.image ? `<img class="deck-image" src="${esc(c.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          ${c.image ? `<img class="deck-image" src="${esc(c.image)}" alt="" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />` : ''}
           <div class="deck-body">
             <div class="deck-headline">${esc(c.title || '')}</div>
             ${body ? `<div class="deck-desc">${esc(body)}</div>` : ''}
@@ -224,63 +253,10 @@ function renderThoughtLeadership(cards) {
   }).join('');
 }
 
-/* ── Topics block ── */
+/* ── Topics block: removed from UI per product decision (2026-04-30).
+   The function is kept as a no-op so any stale callers don't crash. ── */
 let activeTopicFilter = null;
-
-function renderTopics(items) {
-  const block = $('#topicsBlock');
-  const chipsEl = $('#topicChips');
-  const storiesEl = $('#topicStories');
-  if (!items.length) { block.classList.add('hidden'); return; }
-
-  // Collect unique keywords across all items in category
-  const freq = {};
-  for (const item of items) {
-    for (const kw of (item.keywords || [])) {
-      freq[kw] = (freq[kw] || 0) + 1;
-    }
-  }
-  const topics = Object.entries(freq).sort((a,b) => b[1]-a[1]).map(([kw]) => kw);
-  if (!topics.length) { block.classList.add('hidden'); return; }
-
-  activeTopicFilter = null;
-  block.classList.remove('hidden');
-  storiesEl.classList.add('hidden');
-
-  chipsEl.innerHTML = topics.map(t =>
-    `<button class="topic-chip" data-topic="${esc(t)}">${esc(t)}</button>`
-  ).join('');
-
-  chipsEl.querySelectorAll('.topic-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const topic = btn.dataset.topic;
-      if (activeTopicFilter === topic) {
-        activeTopicFilter = null;
-        chipsEl.querySelectorAll('.topic-chip').forEach(b => b.classList.remove('active'));
-        storiesEl.classList.add('hidden');
-        return;
-      }
-      activeTopicFilter = topic;
-      chipsEl.querySelectorAll('.topic-chip').forEach(b => b.classList.toggle('active', b.dataset.topic === topic));
-      const filtered = items.filter(i => (i.keywords || []).includes(topic));
-      storiesEl.innerHTML = filtered.map(item => `
-        <div class="topic-story-item">
-          ${item.image ? `<img class="topic-story-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
-          <div class="topic-story-text">
-            <div class="topic-story-headline">${esc(item.headline)}</div>
-            <div class="topic-story-source">${item.internetSource ? '🌐 ' : ''}${esc(item.source)}</div>
-          </div>
-        </div>`).join('');
-      storiesEl.classList.remove('hidden');
-    });
-  });
-
-  $('#topicsViewAll').onclick = () => {
-    activeTopicFilter = null;
-    chipsEl.querySelectorAll('.topic-chip').forEach(b => b.classList.remove('active'));
-    storiesEl.classList.add('hidden');
-  };
-}
+function renderTopics(_items) { /* removed */ }
 
 function renderDeck() {
   clearReadTimer();
@@ -315,7 +291,7 @@ function renderDeck() {
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.2 19.72C5.1 15.14 1.5 11.94 1.5 8.05 1.5 5.11 3.82 3 6.7 3c1.67 0 3.28.78 4.3 2.02L12 6l1-.98C14.02 3.78 15.63 3 17.3 3c2.88 0 5.2 2.11 5.2 5.05 0 .57-.08 1.11-.22 1.63l-3.05-1.52-1.23 2.46 3.01 1.5c-.55.71-1.22 1.45-2 2.23-.35-.13-.72-.22-1.11-.22a3 3 0 0 0-2.9 2.27l-2.32-1.16 1.23-2.46-4.9-2.44-1.23 2.45 2.44 1.22-2.45 1.22 1.24 2.46 2.73-1.37a3 3 0 0 0 3.07 2.28c.25 0 .49-.03.72-.09L12 21.35z"/></svg>
           </button>
         </div>
-        ${item.image ? `<img class="deck-image" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+        ${item.image ? `<img class="deck-image" src="${esc(item.image)}" alt="" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />` : ''}
         <div class="deck-body">
           <span class="deck-counter">${deckIndex + 1} / ${deckItems.length}</span>
           <div class="deck-headline">${esc(item.headline)}</div>
@@ -549,7 +525,7 @@ function renderMiniDeck(clusterId) {
     return `
       <div class="mini-card ${isActive ? 'mini-active' : ''}" style="--offset:${offset}">
         <div class="mini-inner">
-          ${item.image ? `<img class="mini-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          ${item.image ? `<img class="mini-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />` : ''}
           <div class="mini-body">
             <div class="mini-headline">${esc(item.headline)}</div>
             ${item.description ? `<div class="mini-desc">${esc(item.description)}</div>` : ''}
@@ -1388,7 +1364,7 @@ function renderNoteSimilarDeck(noteId) {
     return `
       <div class="mini-card ${isActive ? 'mini-active' : ''}" style="--offset:${offset}">
         <div class="mini-inner">
-          ${item.image ? `<img class="mini-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          ${item.image ? `<img class="mini-img" src="${esc(item.image)}" alt="" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />` : ''}
           <div class="mini-body">
             <div class="mini-headline">${esc(item.headline)}</div>
             ${item.description ? `<div class="mini-desc">${esc(item.description)}</div>` : ''}
@@ -1674,7 +1650,7 @@ function renderChartOfDayV2(el, payload) {
     <div class="cod-grid">
       ${charts.map(c => `
         <a href="${esc(c.sourceUrl || '#')}" target="_blank" rel="noopener" class="cod-card">
-          <img class="cod-card-img" src="${esc(c.image)}" alt="${esc(c.title || '')}" loading="lazy" onerror="this.style.display='none'" />
+          <img class="cod-card-img" src="${esc(c.image)}" alt="${esc(c.title || '')}" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />
           <div class="cod-card-body">
             <h4 class="cod-card-title">${esc(c.title || 'Chart')}</h4>
             <span class="cod-card-src">${esc(c.source || '')}</span>
