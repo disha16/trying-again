@@ -101,7 +101,12 @@ function renderDigest(data) {
   $('#howToRun').classList.add('hidden');
   $('#digestArea').classList.remove('hidden');
 
-  const date = data.date || '—';
+  // Re-derive the display date from ranAt so the banner always respects the user's timezone.
+  // Falls back to data.date when ranAt is missing (older cached digests).
+  let date = data.date || '—';
+  if (data.ranAt) {
+    try { date = fmtDT(data.ranAt, { month: 'long', day: 'numeric', year: 'numeric' }); } catch {}
+  }
   $('#digestTitle').innerHTML = `<em>today's digest</em> <span class="digest-date-label">— ${date}</span>`;
   const ran = data.ranAt ? fmtDT(data.ranAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   $('#digestMeta').textContent = ran ? `Last updated: ${ran} ${tzAbbr()}` : '';

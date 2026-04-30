@@ -317,7 +317,8 @@ app.post('/api/push-digest', async (req, res) => {
   const { digest } = req.body;
   if (!digest) return res.status(400).json({ error: 'digest required' });
   const now2 = new Date();
-  const todayLabel2 = now2.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const _tz2 = (await storage.getSettings())?.timezone || 'America/New_York';
+  const todayLabel2 = now2.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: _tz2 });
   const stored = { ...digest, date: todayLabel2, ranAt: now2.toISOString() };
   await storage.setLastRun(stored);
   // Also archive to history
@@ -711,7 +712,8 @@ async function runDigestSSE(req, res) {
 
     // ── Save core digest immediately so user sees results fast ──────────────
     const now = new Date();
-    const todayLabel = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    const _tz = settings?.timezone || 'America/New_York';
+    const todayLabel = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: _tz });
     digest.date = todayLabel;
     digest.ranAt = now.toISOString();
     digest.clusterModel = clusterModel;
