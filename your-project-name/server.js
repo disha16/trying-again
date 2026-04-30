@@ -548,30 +548,19 @@ app.get('/api/notes/:id/similar', async (req, res) => {
   const notes = await storage.getNotes();
   const note  = notes.find(n => n.id == req.params.id);
   if (!note) return res.status(404).json({ error: 'Not found' });
-  const exaOn   = (await storage.isExaEnabled()) && !!process.env.EXA_API_KEY;
-  const tavilyOn = !!process.env.TAVILY_API_KEY;
-  if (!exaOn && !tavilyOn) return res.json({ stories: [] });
+  // Use the unified search layer — it transparently fans across
+  // Exa → Tavily → LangSearch → SearXNG → Brave and respects the user's Exa toggle.
+  const { search, hasRealSearchProvider } = require('./lib/web-search');
+  if (!hasRealSearchProvider()) return res.json({ stories: [] });
   try {
     const query = note.title + (note.entries[0] ? ' ' + note.entries[0].headline.slice(0, 60) : '');
     const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|placeholder|pixel|tracking|beacon/i;
     const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|food|recipe|cook|lifestyle|wellness|fitness/i;
     let rawResults = [];
-    // Prefer Exa when admin has it on; otherwise (or on Exa failure) use Tavily.
-    if (exaOn) {
-      try {
-        const Exa = require('exa-js').default;
-        const exa = new Exa(process.env.EXA_API_KEY);
-        const r = await exa.searchAndContents(query, { numResults: 10, category: 'news', text: { maxCharacters: 400 } });
-        rawResults = (r.results || []).map(x => ({ title: x.title, url: x.url, image: x.image || null, text: x.text || '' }));
-      } catch (e) { console.warn('[notes/similar] exa failed, falling back to tavily:', e.message); }
-    }
-    if (!rawResults.length && tavilyOn) {
-      try {
-        const { searchTavily } = require('./lib/web-search');
-        const hits = await searchTavily(query, { numResults: 10 });
-        rawResults = hits.map(x => ({ title: x.title, url: x.url, image: x.image || null, text: x.snippet || x.text || '' }));
-      } catch (e) { console.warn('[notes/similar] tavily failed:', e.message); }
-    }
+    try {
+      const hits = await search(query, { numResults: 10, category: 'news' });
+      rawResults = (hits || []).map(x => ({ title: x.title, url: x.url, image: x.image || null, text: x.text || x.snippet || '' }));
+    } catch (e) { console.warn('[notes/similar] search failed:', e.message); }
     const existingHeadlines = new Set(note.entries.map(e => e.headline?.toLowerCase()));
     const stories = rawResults
       .filter(r => r.title && !existingHeadlines.has(r.title.toLowerCase()))
@@ -648,25 +637,14 @@ async function fetchChatWebContext(query, { force = false } = {}) {
   if (!query) return '';
   if (!force && !wantsWebSearch(query)) return '';
 
-  // Prefer Tavily (free dev tier, always-on). Fall back to Exa only if the
-  // admin toggle is on AND the user explicitly asked.
-  const { searchTavily, searchExa } = require('./lib/web-search');
-  const tryTavily = !!process.env.TAVILY_API_KEY;
-  const tryExa    = !tryTavily && process.env.EXA_API_KEY && (await storage.isExaEnabled());
-
+  // Use the unified web-search layer (Exa → Tavily → LangSearch → SearXNG → Brave → LLM).
+  const { search } = require('./lib/web-search');
   let results = [];
-  let provider = '';
-  if (tryTavily) {
-    try {
-      results  = await searchTavily(query, { numResults: 4 });
-      provider = 'Tavily';
-    } catch (e) { console.warn('[chat/tavily]', e.message); }
-  }
-  if (!results.length && tryExa) {
-    try {
-      results  = await searchExa(query, { numResults: 4 });
-      provider = 'Exa';
-    } catch (e) { console.warn('[chat/exa]', e.message); }
+  try {
+    results = await search(query, { numResults: 4, category: 'news' });
+  } catch (e) {
+    console.warn('[chat/web-search]', e.message);
+    return '';
   }
   if (!results.length) return '';
 
@@ -674,7 +652,7 @@ async function fetchChatWebContext(query, { force = false } = {}) {
     .slice(0, 4)
     .map(r => `• [${r.title || r.url}](${r.url})${r.publishedDate ? ` — ${r.publishedDate}` : ''}\n  ${(r.snippet || r.text || '').slice(0, 600)}`)
     .join('\n\n');
-  return `\n\nLIVE WEB CONTEXT (${provider} search for "${query.slice(0, 120)}"):\n${snippets}\n\nCite the URL inline when you use a fact from above.`;
+  return `\n\nLIVE WEB CONTEXT for "${query.slice(0, 120)}":\n${snippets}\n\nCite the URL inline when you use a fact from above.`;
 }
 
 app.post('/chat', async (req, res) => {

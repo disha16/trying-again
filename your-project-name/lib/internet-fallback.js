@@ -1,6 +1,5 @@
 'use strict';
 
-const Exa = require('exa-js').default;
 const { _callModel } = require('./digest-generator');
 
 const JUDGE_SYSTEM = `You are a news editor reviewing search results to decide which ones are real, individual news articles vs garbage (homepage banners, section index pages, navigation lists, sponsor pages, login walls, calendar/program-listing pages).
@@ -159,30 +158,24 @@ function sourceName(url) {
 }
 
 async function applyInternetFallback(digest, customSections = [], model = 'qwen-plus') {
-  // Pick search provider: Exa if user has it enabled AND key set; otherwise Tavily.
-  let useExa = false;
-  try {
-    const storage = require('./storage');
-    useExa = await storage.isExaEnabled();
-  } catch {}
-  const hasExa    = useExa && !!process.env.EXA_API_KEY;
-  const hasTavily = !!process.env.TAVILY_API_KEY;
-  if (!hasExa && !hasTavily) {
-    console.warn('[internet-fallback] no search provider available (Exa off, no TAVILY_API_KEY) — skipping');
+  // Use the unified search layer so we get the full provider chain
+  // (Exa → LangSearch → Tavily → Brave) with one call. This automatically
+  // respects the user's Exa toggle and any provider keys present.
+  const { search, hasRealSearchProvider } = require('./web-search');
+  if (!hasRealSearchProvider()) {
+    console.warn('[internet-fallback] no real web-search provider configured — skipping');
     return;
   }
-  console.log(`[internet-fallback] provider=${hasExa ? 'exa' : 'tavily'}`);
-
-  // Tiny shim so the search call below stays uniform regardless of provider.
-  const exa = hasExa ? new Exa(process.env.EXA_API_KEY) : null;
   async function searchProvider(query, opts = {}) {
-    if (hasExa) {
-      return exa.search(query, opts);
-    }
-    // Tavily fallback — reuse lib/web-search helper, normalise into Exa-shape.
-    const { searchTavily } = require('./web-search');
-    const results = await searchTavily(query, { numResults: opts.numResults });
-    return { results: results.map(r => ({
+    const results = await search(query, {
+      numResults:         opts.numResults,
+      category:           opts.category,
+      startPublishedDate: opts.startPublishedDate,
+      includeDomains:     opts.includeDomains,
+      // The fallback flow tolerates LangSearch-style results (no images, etc.)
+      allowLLM:           false,
+    });
+    return { results: (results || []).map(r => ({
       title:         r.title,
       url:           r.url,
       snippet:       r.snippet,

@@ -5,10 +5,12 @@
  *
  * Primary: Exa (authoritative, structured, with images).
  * Fallback chain (in order):
- *   1. Exa
- *   2. Tavily (if TAVILY_API_KEY is set)
- *   3. Brave Search (if BRAVE_API_KEY is set)
- *   4. LLM "world knowledge" pseudo-search — ask the LLM to produce N recent-ish
+ *   1. Exa            (if EXA_API_KEY is set AND user toggle is on)
+ *   2. Tavily         (if TAVILY_API_KEY is set)
+ *   3. LangSearch     (if LANGSEARCH_API_KEY is set)
+ *   4. SearXNG        (always; defaults to https://searx.be, override via SEARXNG_URL)
+ *   5. Brave Search   (if BRAVE_API_KEY is set)
+ *   6. LLM "world knowledge" pseudo-search — ask the LLM to produce N recent-ish
  *      article-style JSON results. No real links, but keeps the pipeline alive
  *      when every web source is out of credits.
  *
@@ -61,6 +63,44 @@ async function searchExa(query, opts = {}) {
   }));
 }
 
+async function searchLangSearch(query, opts = {}) {
+  const key = process.env.LANGSEARCH_API_KEY;
+  if (!key) throw new Error('LANGSEARCH_API_KEY not set');
+  // LangSearch supports freshness: oneDay | oneWeek | oneMonth | oneYear | noLimit
+  // Map the optional opts.startPublishedDate hint to the closest bucket.
+  let freshness = 'noLimit';
+  if (opts.startPublishedDate) {
+    const ms = Date.now() - new Date(opts.startPublishedDate).getTime();
+    if      (ms <= 1.5 * 24 * 3600 * 1000) freshness = 'oneDay';
+    else if (ms <=   7 * 24 * 3600 * 1000) freshness = 'oneWeek';
+    else if (ms <=  31 * 24 * 3600 * 1000) freshness = 'oneMonth';
+    else                                   freshness = 'oneYear';
+  }
+  const r = await fetch('https://api.langsearch.com/v1/web-search', {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      query,
+      freshness,
+      summary: true,
+      count:   Math.min(opts.numResults || 10, 50),
+    }),
+  });
+  if (!r.ok) { const err = new Error(`LangSearch ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
+  const data = await r.json();
+  if (data && data.code && data.code !== 200) { const err = new Error(`LangSearch ${data.code}: ${data.msg || ''}`); err.status = data.code; throw err; }
+  const value = data?.data?.webPages?.value || [];
+  return value.map(hit => ({
+    title:         hit.name,
+    url:           hit.url,
+    publishedDate: hit.datePublished || hit.dateLastCrawled || null,
+    text:          hit.summary || hit.snippet || '',
+    snippet:       hit.snippet || hit.summary || '',
+    image:         null, // LangSearch web results don't include thumbnails
+    source:        safeHost(hit.url),
+  }));
+}
+
 async function searchTavily(query, opts = {}) {
   const key = process.env.TAVILY_API_KEY;
   if (!key) throw new Error('TAVILY_API_KEY not set');
@@ -86,6 +126,46 @@ async function searchTavily(query, opts = {}) {
     text:          hit.content || '',
     snippet:       hit.content || '',
     image:         (data.images && data.images[0]) || null,
+    source:        safeHost(hit.url),
+  }));
+}
+
+async function searchSearXNG(query, opts = {}) {
+  // SearXNG is a self-hosted/public meta-search engine — no API key required.
+  // Defaults to https://searx.be (a long-running public instance). Override via
+  // SEARXNG_URL env var (e.g. https://search.brave4u.com or your own host).
+  const base = (process.env.SEARXNG_URL || 'https://searx.be').replace(/\/+$/, '');
+  const params = new URLSearchParams({
+    q:        query,
+    format:   'json',
+    safesearch: '0',
+    language: 'en',
+    categories: 'news',
+  });
+  if (opts.startPublishedDate) {
+    const ms = Date.now() - new Date(opts.startPublishedDate).getTime();
+    let bucket;
+    if      (ms <= 1.5 * 24 * 3600 * 1000) bucket = 'day';
+    else if (ms <=   7 * 24 * 3600 * 1000) bucket = 'week';
+    else if (ms <=  31 * 24 * 3600 * 1000) bucket = 'month';
+    else                                   bucket = 'year';
+    params.set('time_range', bucket);
+  }
+  const r = await fetch(`${base}/search?${params.toString()}`, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (newsletter-digest)' },
+  });
+  if (!r.ok) { const err = new Error(`SearXNG ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
+  let data;
+  try { data = await r.json(); }
+  catch (e) { const err = new Error(`SearXNG returned non-JSON (instance may have JSON disabled): ${e.message}`); err.status = 502; throw err; }
+  const results = (data.results || []).slice(0, opts.numResults || 10);
+  return results.map(hit => ({
+    title:         hit.title,
+    url:           hit.url,
+    publishedDate: hit.publishedDate || null,
+    text:          hit.content || '',
+    snippet:       hit.content || '',
+    image:         hit.thumbnail || hit.img_src || null,
     source:        safeHost(hit.url),
   }));
 }
@@ -150,9 +230,13 @@ async function search(query, opts = {}) {
     catch { exaAllowed = !!process.env.EXA_API_KEY; }
   }
   const chain = [
-    { name: 'exa',    fn: searchExa,    enabled: exaAllowed && !!process.env.EXA_API_KEY },
-    { name: 'tavily', fn: searchTavily, enabled: !!process.env.TAVILY_API_KEY },
-    { name: 'brave',  fn: searchBrave,  enabled: !!process.env.BRAVE_API_KEY  },
+    { name: 'exa',        fn: searchExa,        enabled: exaAllowed && !!process.env.EXA_API_KEY },
+    { name: 'tavily',     fn: searchTavily,     enabled: !!process.env.TAVILY_API_KEY },
+    { name: 'langsearch', fn: searchLangSearch, enabled: !!process.env.LANGSEARCH_API_KEY },
+    // SearXNG is keyless and free to call (best-effort against a public instance);
+    // disable by setting SEARXNG_URL=disabled or any falsy value.
+    { name: 'searxng',    fn: searchSearXNG,    enabled: (process.env.SEARXNG_URL ?? 'https://searx.be') && process.env.SEARXNG_URL !== 'disabled' },
+    { name: 'brave',      fn: searchBrave,      enabled: !!process.env.BRAVE_API_KEY  },
   ];
   // If Exa is disabled by the user, auto-enable the LLM pseudo-search fallback
   // so callers that relied on Exa still get SOMETHING back.
@@ -186,7 +270,10 @@ async function search(query, opts = {}) {
 
 // Convenience: is any real search provider configured?
 function hasRealSearchProvider() {
-  return !!(process.env.EXA_API_KEY || process.env.TAVILY_API_KEY || process.env.BRAVE_API_KEY);
+  // SearXNG is always usable (keyless, public instance default), so as long as
+  // the user hasn't explicitly disabled it we have at least one real provider.
+  if (process.env.SEARXNG_URL !== 'disabled') return true;
+  return !!(process.env.EXA_API_KEY || process.env.LANGSEARCH_API_KEY || process.env.TAVILY_API_KEY || process.env.BRAVE_API_KEY);
 }
 
-module.exports = { search, searchExa, searchTavily, searchBrave, searchLLM, hasRealSearchProvider, isProviderFailure };
+module.exports = { search, searchExa, searchLangSearch, searchTavily, searchSearXNG, searchBrave, searchLLM, hasRealSearchProvider, isProviderFailure };
