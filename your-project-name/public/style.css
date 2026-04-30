@@ -595,7 +595,8 @@ code {
 .badge-web { background: rgba(99,179,237,0.12); color: #63b3ed; border-color: rgba(99,179,237,0.3); font-size: .68rem; }
 .deck-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
 .deck-actions { display: flex; gap: 8px; }
-.deck-btn { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 50%; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .15s; }
+.deck-btn { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 50%; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .15s; text-decoration: none; line-height: 1; }
+.deck-btn:link, .deck-btn:visited, .deck-btn:hover, .deck-btn:active { text-decoration: none; }
 .deck-btn:hover { background: var(--accent); color: #fff; }
 .deck-card.deck-read { border-color: var(--accent); opacity: .7; }
 .deck-card.deck-exit-read { transform: translateX(120%) rotate(12deg) !important; opacity: 0 !important; transition: transform .25s ease, opacity .25s ease; }
