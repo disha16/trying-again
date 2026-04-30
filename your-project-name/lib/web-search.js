@@ -7,13 +7,15 @@
  * Fallback chain (in order):
  *   1. Exa            (if EXA_API_KEY is set AND user toggle is on)
  *   2. Tavily         (if TAVILY_API_KEY is set)
- *   3. LangSearch     (if LANGSEARCH_API_KEY is set)
- *   4. SearXNG        (only if SEARXNG_URL is set — most public instances block bots,
+ *   3. Serper         (if SERPER_API_KEY is set — 2,500 free Google SERP queries on signup)
+ *   4. LangSearch     (if LANGSEARCH_API_KEY is set)
+ *   5. GDELT          (always; keyless, free, real news with images, ~5s rate limit)
+ *   6. Mojeek         (if MOJEEK_API_KEY is set — independent index, small free dev tier)
+ *   7. SearXNG        (only if SEARXNG_URL is set — most public instances block bots,
  *                     so this expects a self-hosted instance)
- *   5. Brave Search   (if BRAVE_API_KEY is set)
- *   6. LLM "world knowledge" pseudo-search — ask the LLM to produce N recent-ish
- *      article-style JSON results. No real links, but keeps the pipeline alive
- *      when every web source is out of credits.
+ *   8. Brave Search   (if BRAVE_API_KEY is set)
+ *   9. LLM pseudo-search — ask the LLM to produce N recent-ish article-style JSON
+ *                     results. No real links, but keeps the pipeline alive.
  *
  * All results are normalised to the same shape:
  *   { title, url, publishedDate?, text?, snippet?, image?, source? }
@@ -131,6 +133,93 @@ async function searchTavily(query, opts = {}) {
   }));
 }
 
+async function searchGDELT(query, opts = {}) {
+  // GDELT DOC 2.0 ArtList — keyless, free, global news with social-media images.
+  // Polite rate-limit ~ 1 req per 5 seconds; we space digest pre-fetches accordingly.
+  // Time bucketing maps to GDELT's `timespan` parameter (in minutes).
+  const params = new URLSearchParams({
+    query:      query,
+    mode:       'ArtList',
+    maxrecords: String(opts.numResults || 10),
+    format:     'json',
+    sort:       'DateDesc',
+  });
+  if (opts.startPublishedDate) {
+    const minsBack = Math.max(60, Math.floor((Date.now() - new Date(opts.startPublishedDate).getTime()) / 60000));
+    params.set('timespan', `${minsBack}min`);
+  } else {
+    // Default to last 7 days for a useful recency signal.
+    params.set('timespan', '10080min');
+  }
+  const r = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params.toString()}`, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (newsletter-digest)' },
+  });
+  if (!r.ok) { const err = new Error(`GDELT ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); }
+  catch { const err = new Error(`GDELT non-JSON: ${text.slice(0, 120)}`); err.status = 502; throw err; }
+  return (data.articles || []).map(a => ({
+    title:         a.title,
+    url:           a.url,
+    publishedDate: a.seendate ? `${a.seendate.slice(0,4)}-${a.seendate.slice(4,6)}-${a.seendate.slice(6,8)}` : null,
+    text:          '', // GDELT only returns title; body must come from a fetcher
+    snippet:       '',
+    image:         a.socialimage || null,
+    source:        a.domain ? a.domain.replace(/^www\./,'').split('.')[0] : safeHost(a.url),
+  }));
+}
+
+async function searchSerper(query, opts = {}) {
+  const key = process.env.SERPER_API_KEY;
+  if (!key) throw new Error('SERPER_API_KEY not set');
+  // Use the news endpoint for fresh, news-flavoured SERP results.
+  const r = await fetch('https://google.serper.dev/news', {
+    method: 'POST',
+    headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query, num: opts.numResults || 10 }),
+  });
+  if (!r.ok) { const err = new Error(`Serper ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
+  const data = await r.json();
+  const items = data.news || data.organic || [];
+  return items.slice(0, opts.numResults || 10).map(hit => ({
+    title:         hit.title,
+    url:           hit.link,
+    publishedDate: hit.date || null,
+    text:          hit.snippet || '',
+    snippet:       hit.snippet || '',
+    image:         hit.imageUrl || null,
+    source:        hit.source || safeHost(hit.link),
+  }));
+}
+
+async function searchMojeek(query, opts = {}) {
+  const key = process.env.MOJEEK_API_KEY;
+  if (!key) throw new Error('MOJEEK_API_KEY not set');
+  // Mojeek API endpoint returns JSON when fmt=json.
+  const params = new URLSearchParams({
+    api_key: key,
+    q:       query,
+    fmt:     'json',
+    t:       String(opts.numResults || 10),
+  });
+  const r = await fetch(`https://www.mojeek.com/search?${params.toString()}`, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (newsletter-digest)' },
+  });
+  if (!r.ok) { const err = new Error(`Mojeek ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
+  const data = await r.json();
+  const results = (data.response && data.response.results) || [];
+  return results.slice(0, opts.numResults || 10).map(hit => ({
+    title:         hit.title,
+    url:           hit.url,
+    publishedDate: hit.date || null,
+    text:          hit.desc || '',
+    snippet:       hit.desc || '',
+    image:         null,
+    source:        safeHost(hit.url),
+  }));
+}
+
 async function searchSearXNG(query, opts = {}) {
   // SearXNG is a self-hosted/public meta-search engine — no API key required.
   // Defaults to https://searx.be (a long-running public instance). Override via
@@ -234,7 +323,11 @@ async function search(query, opts = {}) {
   const chain = [
     { name: 'exa',        fn: searchExa,        enabled: exaAllowed && !!process.env.EXA_API_KEY },
     { name: 'tavily',     fn: searchTavily,     enabled: !!process.env.TAVILY_API_KEY },
+    { name: 'serper',     fn: searchSerper,     enabled: !!process.env.SERPER_API_KEY },
     { name: 'langsearch', fn: searchLangSearch, enabled: !!process.env.LANGSEARCH_API_KEY },
+    // GDELT is keyless and free — always enabled unless explicitly disabled.
+    { name: 'gdelt',      fn: searchGDELT,      enabled: process.env.GDELT_DISABLED !== '1' },
+    { name: 'mojeek',     fn: searchMojeek,     enabled: !!process.env.MOJEEK_API_KEY },
     // SearXNG is keyless but most public instances block bot/server traffic.
     // Only enabled when the user supplies their own self-hosted SEARXNG_URL.
     { name: 'searxng',    fn: searchSearXNG,    enabled: !!process.env.SEARXNG_URL && process.env.SEARXNG_URL !== 'disabled' },
@@ -272,13 +365,18 @@ async function search(query, opts = {}) {
 
 // Convenience: is any real search provider configured?
 function hasRealSearchProvider() {
+  // GDELT is keyless and free — we always have at least one provider unless the
+  // operator explicitly disables it.
+  if (process.env.GDELT_DISABLED !== '1') return true;
   return !!(
     process.env.EXA_API_KEY ||
     process.env.TAVILY_API_KEY ||
+    process.env.SERPER_API_KEY ||
     process.env.LANGSEARCH_API_KEY ||
+    process.env.MOJEEK_API_KEY ||
     (process.env.SEARXNG_URL && process.env.SEARXNG_URL !== 'disabled') ||
     process.env.BRAVE_API_KEY
   );
 }
 
-module.exports = { search, searchExa, searchLangSearch, searchTavily, searchSearXNG, searchBrave, searchLLM, hasRealSearchProvider, isProviderFailure };
+module.exports = { search, searchExa, searchLangSearch, searchTavily, searchSerper, searchGDELT, searchMojeek, searchSearXNG, searchBrave, searchLLM, hasRealSearchProvider, isProviderFailure };
