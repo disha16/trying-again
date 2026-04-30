@@ -1140,8 +1140,10 @@ code {
   gap: 8px;
   flex: 1 1 auto;
 }
-.cod-card-title { font-size: 1.02rem; font-weight: 700; line-height: 1.35; margin: 0; color: var(--text); }
-.cod-card-caption { font-size: .85rem; line-height: 1.5; color: var(--muted-2, var(--muted)); margin: 0; }
+/* Typography MUST match .deck-headline / .deck-desc exactly so card titles and
+   summaries look identical across Top-10 / Chart-of-Day / TL. */
+.cod-card-title { font-size: 1.05rem; font-weight: 700; line-height: 1.4; margin: 0; color: var(--text); font-family: inherit; letter-spacing: 0; }
+.cod-card-caption { font-size: .82rem; line-height: 1.5; color: var(--muted-2, var(--muted)); margin: 0; font-family: inherit; }
 .cod-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border-light); }
 .cod-card-actions { display: flex; gap: 6px; }
 .cod-card-actions .icon-btn {
