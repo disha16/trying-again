@@ -21,13 +21,52 @@ const $ = sel => document.querySelector(sel);
     'world','progress-overview','progress-data','metrics','visionary-technology',
   ];
   function hash(s) { let h = 2166136261; s = String(s || 'x'); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  function pickFallback(key) {
+    return CDN + '/' + SLUGS[hash(key || 'x') % SLUGS.length] + '.svg';
+  }
+  // Public: swap to unDraw if the original image errors / returns empty pixel.
   window.__imgFallback = function (el, key) {
-    if (!el || el.dataset.fellBack === '1') { if (el) el.style.display = 'none'; return; }
+    if (!el || el.dataset.fellBack === '1') return;
     el.dataset.fellBack = '1';
-    el.src = CDN + '/' + SLUGS[hash(key || el.alt || el.src) % SLUGS.length] + '.svg';
-    el.style.objectFit = 'contain';
+    el.removeAttribute('srcset');
+    el.src = pickFallback(key || el.alt || el.src);
+    el.style.objectFit  = 'contain';
     el.style.background = 'var(--surface, #fafafa)';
+    el.style.display    = '';
   };
+  // Public: also detect 0×0 pixels (anti-hotlink CDNs serve these) on load.
+  window.__imgLoaded = function (el, key) {
+    if (!el || el.dataset.fellBack === '1') return;
+    if (!el.naturalWidth || !el.naturalHeight || el.naturalWidth < 24 || el.naturalHeight < 24) {
+      window.__imgFallback(el, key);
+    }
+  };
+  // Sweep that promotes any deck/mini/cod images that are STILL pending after
+  // ~4s to the unDraw fallback (handles indefinite hangs from blocked CDNs).
+  function sweep() {
+    document.querySelectorAll('img.deck-image, img.mini-img, img.cod-card-img').forEach(img => {
+      if (img.dataset.fellBack === '1') return;
+      if (!img.complete || !img.naturalWidth) {
+        window.__imgFallback(img, img.dataset.fbKey || img.alt || img.src);
+      }
+    });
+  }
+  setInterval(sweep, 1500);
+  // Add a no-referrer policy at construction time so hot-link blockers don't
+  // refuse the request based on Referer header. Done via MutationObserver so
+  // we cover dynamic re-renders too.
+  const mo = new MutationObserver(muts => {
+    for (const m of muts) for (const n of m.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      const targets = n.matches?.('img') ? [n] : n.querySelectorAll?.('img') || [];
+      targets.forEach(img => {
+        if (img.matches('img.deck-image, img.mini-img, img.cod-card-img, img.topic-story-img')) {
+          if (!img.hasAttribute('referrerpolicy')) img.setAttribute('referrerpolicy', 'no-referrer');
+        }
+      });
+    }
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
 })();
 
 // ─── Source name prettifier ────────────────────────────────────────────────
