@@ -804,11 +804,14 @@ for (const id of MODEL_PICKERS) {
   });
 }
 
-function applyImagesPreference(_show) {
+function applyImagesPreference(show) {
   // Card images now always render (with unDraw fallback when source URL fails).
   // The Exa toggle no longer hides images — it only controls server-side enrichment
   // (deep dives, similar notes, etc.). This function is kept for backward compat.
   document.documentElement.classList.remove('hide-images');
+  // Show the prototype/dummy-images notice in Settings only when Exa is OFF.
+  const notice = document.getElementById('dummyImagesNotice');
+  if (notice) notice.hidden = !!show;
 }
 $('#useExaToggle')?.addEventListener('change', async e => {
   const on = e.target.checked;

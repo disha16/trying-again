@@ -1402,3 +1402,41 @@ html[data-theme="dark"] .nav-dark { color: var(--accent-deep); }
 .sugg-tl-add:hover:not(:disabled) { background: var(--accent-deep, var(--accent)); }
 .sugg-tl-add:disabled { opacity: .6; cursor: default; }
 .sugg-tl-add.is-added { background: transparent; color: var(--accent); border: 1px solid var(--accent-border); }
+
+
+/* ── Prototype notice banner (above Digest Pipeline group in Settings) ── */
+.prototype-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 16px 0 20px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99,179,237,0.10), rgba(99,179,237,0.04));
+  border: 1px solid rgba(99,179,237,0.28);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.prototype-notice[hidden] { display: none; }
+.prototype-notice-icon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  color: #4a8ec9;
+  margin-top: 1px;
+}
+.prototype-notice-icon svg { width: 100%; height: 100%; display: block; }
+.prototype-notice-body { flex: 1 1 auto; min-width: 0; }
+.prototype-notice-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-bottom: 3px;
+}
+.prototype-notice-text {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.prototype-notice-text strong { color: var(--text); font-weight: 600; }
+.prototype-notice-text em { font-style: normal; color: var(--text); font-weight: 500; }
