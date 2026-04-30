@@ -281,8 +281,43 @@ app.get('/api/charts',    async (req, res) => {
   const last = await storage.getLastRun();
   res.json({ charts: last?.charts || [] });
 });
+// ─── Image proxy: serve remote images via our origin to bypass hot-link blocking ─────────
+const _imgProxyCache = new Map(); // key=url → { buf, type, exp }
+app.get('/api/img-proxy', async (req, res) => {
+  const url = req.query.url;
+  if (!url || !/^https?:\/\//i.test(url)) return res.status(400).send('bad url');
+  // Whitelist: only allow chart sources we've explicitly opted in to.
+  const ALLOW = /(bilello|charlie\.bilello|apolloacademy|nytimes\.com|nyt\.com|seekingalpha\.com|bloomberg|ft\.com|economist|substackcdn|wsj\.com|reuters\.com|cnbc\.com|wbn\.cdn)/i;
+  if (!ALLOW.test(url)) return res.status(403).send('host not allowed');
+  const now = Date.now();
+  const cached = _imgProxyCache.get(url);
+  if (cached && cached.exp > now) {
+    res.set('Content-Type', cached.type).set('Cache-Control', 'public, max-age=86400').send(cached.buf);
+    return;
+  }
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Referer': new URL(url).origin + '/',
+      },
+      redirect: 'follow',
+    });
+    if (!r.ok) return res.status(502).send(`upstream ${r.status}`);
+    const type = r.headers.get('content-type') || 'image/png';
+    const buf  = Buffer.from(await r.arrayBuffer());
+    if (buf.length < 200) return res.status(502).send('upstream tiny');
+    _imgProxyCache.set(url, { buf, type, exp: now + 6 * 3600 * 1000 });
+    if (_imgProxyCache.size > 200) _imgProxyCache.delete(_imgProxyCache.keys().next().value);
+    res.set('Content-Type', type).set('Cache-Control', 'public, max-age=86400').send(buf);
+  } catch (e) {
+    console.error('[img-proxy]', e.message);
+    res.status(502).send('proxy error');
+  }
+});
 
-// ─── Chart of the Day (Exa + LLM → Chart.js data) ────────────────────────────
+// ─── Chart of the Day (Exa + LLM → Chart.js data) ────────────────────────────────
 const chartOfDay       = require('./lib/chart-of-day');
 const thoughtLeadership = require('./lib/thought-leadership');
 const earningsLib      = require('./lib/earnings');

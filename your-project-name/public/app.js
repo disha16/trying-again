@@ -44,14 +44,33 @@ const $ = sel => document.querySelector(sel);
   // Sweep that promotes any deck/mini/cod images that are STILL pending after
   // ~4s to the unDraw fallback (handles indefinite hangs from blocked CDNs).
   function sweep() {
-    document.querySelectorAll('img.deck-image, img.mini-img, img.cod-card-img').forEach(img => {
+    // Charts deliberately use __codImgFail (placeholder, not cartoon) — exclude them.
+    document.querySelectorAll('img.deck-image, img.mini-img').forEach(img => {
       if (img.dataset.fellBack === '1') return;
       if (!img.complete || !img.naturalWidth) {
         window.__imgFallback(img, img.dataset.fbKey || img.alt || img.src);
       }
     });
+    // Charts: if still pending after the sweep tick, treat as failed and show placeholder.
+    document.querySelectorAll('img.cod-card-img').forEach(img => {
+      if (img.dataset.fellBack === '1') return;
+      if (!img.complete || !img.naturalWidth) {
+        window.__codImgFail(img);
+      }
+    });
   }
-  setInterval(sweep, 1500);
+  setInterval(sweep, 2500);
+
+  // Chart-of-day: when image fails, hide the broken <img> and reveal the
+  // sibling .cod-card-img-placeholder (clean SVG icon + caption). NEVER swap
+  // to an unDraw cartoon — charts must look like data, not marketing art.
+  window.__codImgFail = function (el) {
+    if (!el || el.dataset.fellBack === '1') return;
+    el.dataset.fellBack = '1';
+    el.style.display = 'none';
+    const ph = el.parentElement?.querySelector('.cod-card-img-placeholder');
+    if (ph) ph.classList.remove('hidden');
+  };
   // Add a no-referrer policy at construction time so hot-link blockers don't
   // refuse the request based on Referer header. Done via MutationObserver so
   // we cover dynamic re-renders too.
@@ -1761,7 +1780,18 @@ function renderChartOfDayV2(el, payload) {
         return `
         <article class="cod-card deck-card-style" data-chart-url="${url}" data-chart-title="${title}">
           <div class="cod-card-inner">
-            <img class="cod-card-img" src="${esc(c.image)}" alt="${title}" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />
+            <div class="cod-card-image-plate">
+              ${c.image
+                ? `<img class="cod-card-img" src="/api/img-proxy?url=${encodeURIComponent(c.image)}" data-orig="${esc(c.image)}" alt="${title}" loading="lazy" onerror="__codImgFail(this)" />
+                   <div class="cod-card-img-placeholder hidden">
+                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+                     <span>Chart preview unavailable</span>
+                   </div>`
+                : `<div class="cod-card-img-placeholder">
+                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+                     <span>Chart preview unavailable</span>
+                   </div>`}
+            </div>
             <div class="cod-card-body">
               <h4 class="cod-card-title">${title}</h4>
               ${caption ? `<p class="cod-card-caption">${caption}</p>` : ''}
