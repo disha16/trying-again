@@ -976,10 +976,7 @@ code {
 .deck-down.voted { color: #f87171; }
 
 /* ── Hide images & chart preference ── */
-html.hide-images .deck-image,
-html.hide-images .topic-story-img,
-html.hide-images .mini-img { display: none !important; }
-html.hide-images #chartsOfDay { display: none !important; }
+/* .hide-images class deprecated 2026-04-30; card images always render with unDraw fallback. */
 
 
 /* Compact feedback (top-right of deck card) */

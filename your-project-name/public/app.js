@@ -766,8 +766,11 @@ for (const id of MODEL_PICKERS) {
   });
 }
 
-function applyImagesPreference(show) {
-  document.documentElement.classList.toggle('hide-images', !show);
+function applyImagesPreference(_show) {
+  // Card images now always render (with unDraw fallback when source URL fails).
+  // The Exa toggle no longer hides images — it only controls server-side enrichment
+  // (deep dives, similar notes, etc.). This function is kept for backward compat.
+  document.documentElement.classList.remove('hide-images');
 }
 $('#useExaToggle')?.addEventListener('change', async e => {
   const on = e.target.checked;
