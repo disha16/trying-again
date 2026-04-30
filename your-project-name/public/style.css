@@ -637,6 +637,8 @@ code {
 .tc-chevron { font-size: 1.3rem; color: var(--muted); transition: transform .2s; line-height: 1; }
 .tc-header.tc-open .tc-chevron { transform: rotate(90deg); color: var(--accent); }
 .tc-deck-wrap { padding: 18px 20px 22px; background: var(--surface-2); }
+.tc-deck-wrap:empty { padding: 0; background: transparent; }
+.tc-header:not(.tc-open) + .tc-deck-wrap { padding: 0; background: transparent; }
 .tc-empty { font-size: .8rem; color: var(--muted); padding: 12px 0; text-align: center; }
 
 /* Mini-deck cards (open deep-dive angles) */
