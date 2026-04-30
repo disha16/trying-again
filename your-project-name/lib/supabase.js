@@ -98,6 +98,74 @@ async function getLatestDigest() {
   return data || null;
 }
 
+/**
+ * List the most recent N cached digests (metadata only — no payload).
+ * Used by the Settings → Last run cache panel.
+ */
+async function listDigests(limit = 14) {
+  const { data, error } = await getClient()
+    .from('digest_cache')
+    .select('date_key, ran_at, enriched')
+    .order('ran_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`[digest_cache.list] ${error.message}`);
+  return data || [];
+}
+
+/**
+ * List recent read-stories rows (used for Thought Leadership dedupe + read map).
+ */
+async function listReadStories({ limit = 500, days = 365 } = {}) {
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const { data, error } = await getClient()
+    .from('read_stories')
+    .select('headline, cluster_keywords, category, source, read_at')
+    .gte('read_at', since)
+    .order('read_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`[read_stories.list] ${error.message}`);
+  return data || [];
+}
+
+/**
+ * Delete digest_cache + read_stories rows older than `days`. Used by the 3pm
+ * cron as a lightweight garbage-collection step. Feedback (kv_store rows keyed
+ * `feedback:*`) and notebook (`notebook:*`) are NEVER swept here.
+ */
+async function purgeOldCache({ days = 30 } = {}) {
+  const cutoff = new Date(Date.now() - days * 864e5).toISOString();
+  const c = getClient();
+  const results = {};
+  const a = await c.from('digest_cache').delete().lt('ran_at', cutoff).select('date_key');
+  results.digestsDeleted = a.data?.length || 0;
+  const b = await c.from('read_stories').delete().lt('read_at', cutoff).select('id');
+  results.readStoriesDeleted = b.data?.length || 0;
+  // kv_store sweep: anything whose key starts with 'cache:' or 'temp:' AND is older than cutoff
+  const d = await c.from('kv_store').delete().lt('updated_at', cutoff)
+    .or("key.like.cache:%,key.like.temp:%").select('key');
+  results.kvCacheDeleted = d.data?.length || 0;
+  return results;
+}
+
+/**
+ * Remove notebook entries whose last-touched timestamp is older than 365 days.
+ * Notebook rows live in kv_store under key `notebook:entries` (a JSON array).
+ */
+async function purgeIdleNotebook({ days = 365 } = {}) {
+  const c = getClient();
+  const { data, error } = await c.from('kv_store').select('value').eq('key', 'notebook:entries').maybeSingle();
+  if (error || !data?.value) return { purged: 0 };
+  const cutoff = Date.now() - days * 864e5;
+  const before = Array.isArray(data.value) ? data.value : [];
+  const after = before.filter(n => {
+    const t = new Date(n.updatedAt || n.createdAt || 0).getTime();
+    return isFinite(t) && t > cutoff;
+  });
+  if (after.length === before.length) return { purged: 0 };
+  await c.from('kv_store').upsert({ key: 'notebook:entries', value: after, updated_at: new Date().toISOString() });
+  return { purged: before.length - after.length };
+}
+
 module.exports = {
   markRead,
   getReadHistory,
@@ -105,4 +173,8 @@ module.exports = {
   saveDigest,
   getDigest,
   getLatestDigest,
+  listDigests,
+  listReadStories,
+  purgeOldCache,
+  purgeIdleNotebook,
 };

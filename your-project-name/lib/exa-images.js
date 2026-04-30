@@ -35,7 +35,12 @@ async function fetchExaImage(exa, headline) {
   return hit?.image || null;
 }
 
-async function enrichClustersWithImages(clusters) {
+async function enrichClustersWithImages(clusters, opts = {}) {
+  // Respect the admin-only "show images & chart" toggle: when off, we skip the
+  // entire image fetch so we don't burn Exa credits fetching assets the user
+  // has chosen to hide.
+  if (opts.showImages === false) { console.log('[exa] images disabled by settings — skipping'); return; }
+
   const apiKey = process.env.EXA_API_KEY;
   if (!apiKey) { console.warn('[exa] EXA_API_KEY not set — skipping'); return; }
 

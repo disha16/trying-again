@@ -103,23 +103,58 @@ function extractImageUrls(msg) {
   return urls;
 }
 
+// ── 3pm-ET to 3pm-ET window helper ──────────────────────────────────────────
+// Returns { startSec, endSec, dateKey } in epoch seconds. The window always
+// ends at 3pm ET (19:00 UTC during EDT, 20:00 UTC during EST). If "now" is
+// before today's 3pm ET boundary, the window is [yesterday 3pm → today 3pm].
+// Otherwise it's [today 3pm → tomorrow 3pm] (we're building the next digest).
+function currentNewsletterWindow(now = new Date()) {
+  // Use a fixed -4h offset during US-EDT (Mar–Nov). This is deliberate: the
+  // newsletter cutoff is "3pm ET", which aligns with the user's 3pm-at-their-desk
+  // mental model. (Close enough — for a perfect DST switch we'd use Intl APIs.)
+  const ET_OFFSET_HOURS = 4; // EDT → UTC is +4; EST → UTC is +5. EDT is the majority of the year.
+  const nowUtc = now.getTime();
+  const utc = new Date(nowUtc);
+  // Today at 15:00 ET = today 19:00 UTC (during EDT)
+  const today15UtcMs = Date.UTC(
+    utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(),
+    15 + ET_OFFSET_HOURS, 0, 0, 0
+  );
+  let endMs;
+  if (nowUtc < today15UtcMs) {
+    // Still before today's 3pm ET — current window ends today at 3pm ET
+    endMs = today15UtcMs;
+  } else {
+    // Past 3pm ET — next window ends tomorrow 3pm ET
+    endMs = today15UtcMs + 24 * 60 * 60 * 1000;
+  }
+  const startMs = endMs - 24 * 60 * 60 * 1000;
+  const end     = new Date(endMs);
+  const dateKey = `${end.getUTCFullYear()}-${String(end.getUTCMonth()+1).padStart(2,'0')}-${String(end.getUTCDate()).padStart(2,'0')}`;
+  return { startSec: Math.floor(startMs / 1000), endSec: Math.floor(endMs / 1000), dateKey };
+}
+
+// Returns { name, kind } where kind is 'newsletter' | 'thought_leadership'.
+// kind is inferred from the configured source's `kind` field when matched.
 function getSource(from, configuredSources = []) {
   // 1. Match against user-configured sources by email address
   for (const s of configuredSources) {
-    if (s.email && from.toLowerCase().includes(s.email.toLowerCase())) return s.name;
+    if (s.email && from.toLowerCase().includes(s.email.toLowerCase()))
+      return { name: s.name, kind: s.kind || 'newsletter' };
   }
   // 2. Match by domain against configured sources
   const domainMatch = from.match(/@([\w.-]+)/);
   if (domainMatch) {
     const domain = domainMatch[1].toLowerCase();
     for (const s of configuredSources) {
-      if (s.email && s.email.toLowerCase().includes(domain.split('.')[0])) return s.name;
+      if (s.email && s.email.toLowerCase().includes(domain.split('.')[0]))
+        return { name: s.name, kind: s.kind || 'newsletter' };
     }
   }
   // 3. Fall back to sender display name
   const nameMatch = from.match(/^([^<]+)</);
-  if (nameMatch) return nameMatch[1].trim();
-  return domainMatch ? domainMatch[1] : from;
+  if (nameMatch) return { name: nameMatch[1].trim(), kind: 'newsletter' };
+  return { name: domainMatch ? domainMatch[1] : from, kind: 'newsletter' };
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -133,11 +168,16 @@ async function fetchNewsletterHeadlines() {
   const gmail            = google.gmail({ version: 'v1', auth });
   const [cache, sources] = await Promise.all([getEmailCache(), getSources()]);
 
-  // 1. Get message list (IDs only — very cheap)
+  // 1. Get message list (IDs only — very cheap).
+  // Strict window: from 3pm ET (previous day) to 3pm ET (today). If the current
+  // moment is before 3pm ET, we're still inside the prior window.
+  const { startSec, endSec } = currentNewsletterWindow();
+  const q = `in:inbox subject:FW after:${startSec} before:${endSec}`;
+  console.log(`[gmail] window: ${new Date(startSec*1000).toISOString()} → ${new Date(endSec*1000).toISOString()}`);
   const listRes = await gmail.users.messages.list({
     userId:     'me',
-    q:          'in:inbox newer_than:1d subject:FW',
-    maxResults: 20,
+    q,
+    maxResults: 40,
   });
 
   const messages = listRes.data.messages ?? [];
@@ -167,16 +207,16 @@ async function fetchNewsletterHeadlines() {
 
       // For forwarded emails the outer `from` is the user, not the newsletter.
       // Try to recover the original sender from the forward header in the body.
-      let source = getSource(from, sources);
+      let meta = getSource(from, sources);
       const isForward = /^(fw|fwd):/i.test(subject.trim());
-      if (isForward && source === getSource(from, [])) {
+      if (isForward && meta.name === getSource(from, []).name) {
         // source fell through to display-name fallback — try the original sender
         const fwFrom = bodyText.match(/^From:\s*(.+)/m)?.[1] ?? '';
-        if (fwFrom) source = getSource(fwFrom, sources);
+        if (fwFrom) meta = getSource(fwFrom, sources);
       }
       const imageUrls = extractImageUrls(msg);
 
-      const entry = { id, source, bodyText, imageUrls, cachedAt: new Date().toISOString() };
+      const entry = { id, source: meta.name, kind: meta.kind, subject, bodyText, imageUrls, cachedAt: new Date().toISOString() };
       cache[id]   = entry;
       entries.push(entry);
     } catch { /* skip failed fetches */ }
@@ -189,4 +229,4 @@ async function fetchNewsletterHeadlines() {
   return { entries, cacheHits, cacheMisses };
 }
 
-module.exports = { getAuthUrl, handleCallback, fetchNewsletterHeadlines };
+module.exports = { getAuthUrl, handleCallback, fetchNewsletterHeadlines, currentNewsletterWindow };

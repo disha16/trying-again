@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS = {
   editorModel:      'llama-3.3-70b-versatile',
   chatModel:        'llama-3.3-70b-versatile',
   internetFallback: true,
+  showImages:       true,  // admin-only: when false, skip image fetch + chart-of-day
 };
 const getSettings = () => getKey('settings').then(v => ({ ...DEFAULT_SETTINGS, ...(v ?? {}) }));
 const setSettings = s  => setKey('settings', s);
@@ -107,6 +108,8 @@ const setQualityNote = note => setKey('qualityNote', note);
 module.exports = {
   isVercel: true, // always true now — kept for backward compat
   getKey, setKey,
+  // Aliases so newer modules can use getKV/setKV idiom
+  getKV: getKey, setKV: setKey,
   getSources, setSources,
   getLastRun, setLastRun,
   getInboxSnapshot, setInboxSnapshot,

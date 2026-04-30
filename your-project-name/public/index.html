@@ -18,6 +18,7 @@
       <button class="tab" data-tab="persona">Persona</button>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
+    <button id="reportIssueBtn" class="nav-report" title="Report an issue">Report an issue</button>
   </header>
 
   <!-- ─── DIGEST TAB ─── -->
@@ -53,6 +54,15 @@
 
       <!-- Charts of the Day (top_today only) -->
       <div id="chartsOfDay" class="hidden"></div>
+
+      <!-- Thought Leadership deck (above Topics) -->
+      <div id="thoughtLeadership" class="tl-block hidden">
+        <div class="tl-header">
+          <span class="tl-title">Thought Leadership</span>
+          <span class="tl-sub">1-min TL;DRs from your Substacks</span>
+        </div>
+        <div id="tlDeck" class="tl-deck"></div>
+      </div>
 
       <!-- Topics block -->
       <div id="topicsBlock" class="topics-block hidden">
@@ -127,6 +137,10 @@
       <input type="text" id="newSourceInput" placeholder="Name, e.g. TechCrunch" />
       <input type="email" id="newSourceEmail" placeholder="Sender email, e.g. newsletters@techcrunch.com" />
       <input type="url" id="newSourceUrl" placeholder="Website, e.g. https://techcrunch.com" />
+      <select id="newSourceKind" class="source-kind">
+        <option value="newsletter">Newsletter</option>
+        <option value="thought_leadership">Thought Leadership</option>
+      </select>
       <button id="addSourceBtn" class="btn-primary">Add</button>
     </div>
     <p class="source-hint">The sender email is in the forwarded email body — look for "From: …" inside the email.</p>
@@ -255,20 +269,6 @@
     <h2><em>model settings</em></h2>
     <p class="meta">Choose which model powers each part of the process. Changes take effect on the next run.</p>
 
-    <div class="model-group">
-      <div class="model-group-label">API Keys</div>
-
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <span class="settings-label">Anthropic API Key</span>
-          <span class="settings-hint" id="anthropicKeyHint">Required to use Claude Sonnet/Opus/Haiku models below. Stored locally only.</span>
-        </div>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <input type="password" id="anthropicApiKey" class="model-picker" placeholder="sk-ant-..." autocomplete="off" style="min-width:240px;" />
-          <button type="button" id="saveAnthropicKey" class="btn-small">Save</button>
-        </div>
-      </div>
-    </div>
 
     <div class="model-group">
       <div class="model-group-label">Digest Pipeline</div>
@@ -385,11 +385,31 @@
       <div class="model-group-label" style="margin-bottom:12px">Display</div>
       <div class="settings-row">
         <div class="settings-row-info">
-          <span class="settings-label">Show images &amp; Chart of the Day</span>
-          <span class="settings-hint">Turn off to hide story images and the daily chart</span>
+          <span class="settings-label">Show images &amp; Chart of the Day <span class="admin-chip">for admin use only</span></span>
+          <span class="settings-hint">When off, images and the daily chart are not fetched or generated — saves web-search credits.</span>
         </div>
         <label class="toggle"><input type="checkbox" id="showImagesToggle" checked /><span class="slider"></span></label>
       </div>
+    </div>
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <div class="model-group-label" style="margin-bottom:12px">Chart of the Day — sources</div>
+      <p class="meta" style="margin:0 0 10px;">Pages and Twitter/X accounts we scrape at 3pm to build the chart-of-day carousel. Up to 5 charts total, round-robined across sources.</p>
+      <ul id="chartSourceList" class="source-list" style="margin-bottom:10px"></ul>
+      <div class="add-source-row" style="margin-top:6px">
+        <input type="text" id="newChartSrcName" placeholder="Label, e.g. Charlie Bilello" />
+        <input type="url"  id="newChartSrcUrl"  placeholder="https://twitter.com/@handle or a page URL" />
+        <select id="newChartSrcKind" class="source-kind">
+          <option value="html">Web page</option>
+          <option value="twitter">Twitter / X</option>
+        </select>
+        <button id="addChartSrcBtn" class="btn-primary">Add</button>
+      </div>
+    </div>
+
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <div class="model-group-label" style="margin-bottom:12px">Last run cache</div>
+      <p class="meta" style="margin:0 0 10px;">The 3pm cron generates and caches the digest, deep dives, and chart of the day each afternoon. This panel shows which daily caches currently exist in Supabase.</p>
+      <div id="cacheIndex" class="cache-index">Loading…</div>
     </div>
 
     <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
@@ -474,6 +494,32 @@
       </div>
 
       <div id="trainerStatus" class="trainer-status hidden"></div>
+    </div>
+  </div>
+
+  <!-- ── First-run walkthrough ── -->
+  <div id="walkthroughOverlay" class="wk-overlay hidden">
+    <div class="wk-modal">
+      <button id="wkSkip" class="wk-skip">Skip tutorial</button>
+      <div id="wkSlides"><!-- slides injected --></div>
+      <div class="wk-footer">
+        <div class="wk-dots" id="wkDots"></div>
+        <button id="wkNext" class="btn-primary wk-next">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Report-an-issue modal ── -->
+  <div id="issueModal" class="wk-overlay hidden">
+    <div class="wk-modal" style="max-width:460px">
+      <h3 style="margin:0 0 6px;font-family:Georgia,serif">Report an issue</h3>
+      <p class="meta" style="margin:0 0 12px">Tell me what went wrong. I read every one of these.</p>
+      <textarea id="issueText" rows="5" placeholder="What happened? What were you expecting?" style="width:100%;padding:10px;border:1px solid var(--border-light);border-radius:10px;font:inherit;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button id="issueCancel" class="btn-secondary">Cancel</button>
+        <button id="issueSubmit" class="btn-primary">Submit</button>
+      </div>
+      <p id="issueStatus" class="meta" style="margin-top:8px"></p>
     </div>
   </div>
 

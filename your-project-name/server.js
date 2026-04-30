@@ -13,6 +13,7 @@ const topicClusters     = require('./lib/topic-clusters');
 const charts            = require('./lib/charts');
 const editor            = require('./lib/editor');
 const supa          = require('./lib/supabase');
+const issueReports  = require('./lib/issue-reports');
 
 const app  = express();
 app.use(cors());
@@ -30,10 +31,18 @@ app.get('/sources', async (req, res) => {
 });
 
 app.post('/sources', async (req, res) => {
-  const { name, email, url } = req.body;
+  const { name, email, url, kind } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
-  const sources = await storage.getSources();
-  const src = { id: Date.now(), name: name.trim(), email: (email || '').trim(), url: (url || '').trim(), enabled: true };
+  const safeKind = kind === 'thought_leadership' ? 'thought_leadership' : 'newsletter';
+  const sources  = await storage.getSources();
+  const src = {
+    id:      Date.now(),
+    name:    name.trim(),
+    email:   (email || '').trim(),
+    url:     (url || '').trim(),
+    kind:    safeKind,
+    enabled: true,
+  };
   sources.push(src);
   await storage.setSources(sources);
   res.json(src);
@@ -46,6 +55,7 @@ app.patch('/sources/:id', async (req, res) => {
   if (req.body.enabled !== undefined) src.enabled = req.body.enabled;
   if (req.body.email   !== undefined) src.email   = req.body.email.trim();
   if (req.body.url     !== undefined) src.url     = req.body.url.trim();
+  if (req.body.kind    !== undefined) src.kind    = req.body.kind === 'thought_leadership' ? 'thought_leadership' : 'newsletter';
   await storage.setSources(sources);
   res.json(src);
 });
@@ -135,32 +145,43 @@ app.get('/last-run', async (req, res) => {
   res.json(await storage.getLastRun());
 });
 app.get('/api/clusters',  async (req, res) => res.json(await storage.getClusters()));
-app.get('/api/digest-history', async (req, res) => {
-  const h       = await storage.getDigestHistory();
-  const lastRun = await storage.getLastRun();
-
-  // Backfill using client's local today key (avoids UTC vs local timezone mismatch)
-  const clientToday = req.query.today; // e.g. "2026-04-27"
-  if (lastRun?.ranAt) {
-    // Store under both the client's local date AND the server UTC date
-    const keys = [lastRun.ranAt.slice(0, 10)];
-    if (clientToday && !keys.includes(clientToday)) keys.push(clientToday);
-    for (const k of keys) {
-      if (!h[k]) { h[k] = lastRun; await storage.setDigestHistory(h); }
+app.get('/api/digest-history', async (_req, res) => {
+  // Canonical source of date-picker dates: Supabase digest_cache.
+  // Falls back to the legacy kv digestHistory for any pre-migration rows.
+  const index = {};
+  try {
+    const list = await supa.listDigests(60);
+    for (const r of list) {
+      index[r.date_key] = { date: r.digest?.date || r.date_key, ranAt: r.ran_at };
     }
-  }
-
-  const index = Object.fromEntries(Object.entries(h).map(([date, d]) => [date, { date: d.date, ranAt: d.ranAt }]));
+  } catch (e) { console.warn('[digest-history] supa:', e.message); }
+  try {
+    const legacy = await storage.getDigestHistory();
+    for (const [k, d] of Object.entries(legacy)) {
+      if (!index[k]) index[k] = { date: d.date, ranAt: d.ranAt };
+    }
+  } catch {}
   res.json(index);
 });
 
 app.get('/api/digest/:date', async (req, res) => {
+  const dateKey = req.params.date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'bad date' });
+
+  // 1) Prefer Supabase digest_cache (the canonical 3pm-run store)
+  try {
+    const row = await supa.getDigest(dateKey);
+    if (row?.digest) return res.json(row.digest);
+  } catch (e) { console.warn('[digest.get] supa:', e.message); }
+
+  // 2) Fallback to legacy kv digestHistory (older rows)
   const h = await storage.getDigestHistory();
-  let d = h[req.params.date];
-  // Fallback: if requesting today and it's in lastRun but not history yet
+  let d = h[dateKey];
+
+  // 3) If asking for today and it's still in the in-memory lastRun, serve it
   if (!d) {
     const lastRun = await storage.getLastRun();
-    if (lastRun?.ranAt?.startsWith(req.params.date)) d = lastRun;
+    if (lastRun?.ranAt?.startsWith(dateKey)) d = lastRun;
   }
   if (!d) return res.status(404).json({ error: 'No digest for this date' });
   res.json(d);
@@ -172,45 +193,54 @@ app.get('/api/charts',    async (req, res) => {
 });
 
 // ─── Chart of the Day (Exa + LLM → Chart.js data) ────────────────────────────
-const chartOfDay = require('./lib/chart-of-day');
+const chartOfDay       = require('./lib/chart-of-day');
+const thoughtLeadership = require('./lib/thought-leadership');
 
 let chartInFlight = null;
 
 app.get('/api/chart-of-day', async (req, res) => {
   try {
-    const now = new Date();
-    const y = now.getFullYear(), m = String(now.getMonth()+1).padStart(2,'0'), d = String(now.getDate()).padStart(2,'0');
-    const dateKey = `${y}-${m}-${d}`;
+    // Admin toggle: when showImages is off we never generate or serve charts.
+    const settings0 = await storage.getSettings();
+    if (settings0.showImages === false) return res.status(204).end();
 
-    // Return cached chart for today if available
-    const lastRun = await storage.getLastRun();
-    if (lastRun?.chartOfDay?.[dateKey]) {
-      return res.json(lastRun.chartOfDay[dateKey]);
-    }
+    // Accept an optional ?date=YYYY-MM-DD so the date-picker can request a cached run.
+    const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
+      ? req.query.date
+      : undefined;
 
-    // In-flight deduplication: concurrent callers share one subprocess
+    // Coalesce concurrent callers.
     if (chartInFlight) {
-      const chart = await chartInFlight;
-      return res.json(chart);
+      const payload = await chartInFlight;
+      return res.json(payload);
     }
-
-    const settings = await storage.getSettings();
-    const model    = settings.digestModel || 'llama-3.3-70b-versatile';
-    chartInFlight  = chartOfDay.fetchChartOfDay(model)
-      .finally(() => { chartInFlight = null; });
-    const chart    = await chartInFlight;
-
-    // Cache today's chart
-    const updated = lastRun ? { ...lastRun } : {};
-    if (!updated.chartOfDay) updated.chartOfDay = {};
-    updated.chartOfDay[dateKey] = chart;
-    await storage.setLastRun(updated);
-
-    res.json(chart);
+    chartInFlight = chartOfDay.getCharts({ dateKey }).finally(() => { chartInFlight = null; });
+    const payload = await chartInFlight;
+    res.json(payload);
   } catch (e) {
     console.error('[chart-of-day]', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Expose chart-source configuration so the settings panel can list/edit them.
+app.get('/api/chart-sources', async (_req, res) => {
+  try { res.json(await chartOfDay.getChartSources()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/chart-sources', async (req, res) => {
+  try {
+    const sources = Array.isArray(req.body?.sources) ? req.body.sources : [];
+    const cleaned = sources.map(s => ({
+      name:  String(s.name || '').slice(0, 80),
+      kind:  s.kind === 'twitter' ? 'twitter' : 'html',
+      url:   String(s.url || ''),
+      limit: Math.min(5, Math.max(1, Number(s.limit) || 2)),
+    })).filter(s => s.name && /^https?:\/\//.test(s.url));
+    const current = await storage.getSettings();
+    await storage.setSettings({ ...current, chartSources: cleaned });
+    res.json({ ok: true, count: cleaned.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/images',    async (req, res) => {
   const cache = await storage.getEmailCache();
@@ -242,6 +272,39 @@ app.post('/api/feedback', async (req, res) => {
     await storage.addFeedback(dk, { headline, category, source, vote, at: now.toISOString() });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Last run cache (Supabase digest_cache) ─────────────────────────────────
+// Powers the Settings → "Last run cache" panel, so the user can see exactly
+// which digests are currently cached and when each was generated.
+
+// ─── Report an issue (logs to Supabase, emails drawal@mba2027.hbs.edu) ─────────
+// The recipient email is NEVER sent to the client.
+app.post('/api/report-issue', async (req, res) => {
+  try {
+    const body = String(req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'body required' });
+    if (body.length > 4000) return res.status(400).json({ error: 'body too long' });
+    const userAgent = req.get('user-agent') || null;
+    const url       = String(req.body?.url || '').slice(0, 500) || null;
+    const logged    = await issueReports.logIssue({ body, userAgent, url });
+    const emailed   = await issueReports.emailIssue({ body, userAgent, url, id: logged.id, createdAt: logged.created_at })
+      .catch(e => ({ emailed: false, reason: e.message }));
+    res.json({ ok: true, id: logged.id, emailed: !!emailed.emailed });
+  } catch (e) {
+    console.error('[report-issue]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/cache-index', async (req, res) => {
+  try {
+    const list = await supa.listDigests(14);
+    res.json(list.map(r => ({ dateKey: r.date_key, ranAt: r.ran_at, enriched: !!r.enriched })));
+  } catch (e) {
+    console.error('[cache-index]', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/read-history', async (req, res) => {
@@ -591,8 +654,8 @@ async function runDigestSSE(req, res) {
     console.log('[cron/digest] starting clustering…');
     const clusters = await clusterer.clusterHeadlines(entries, clusterModel);
     console.log(`[cron/digest] clustering done: ${clusters.length} clusters`);
-    send('status', { message: `${clusters.length} unique stories. Fetching article images…` });
-    await exaImages.enrichClustersWithImages(clusters);
+    send('status', { message: settings.showImages === false ? `${clusters.length} unique stories.` : `${clusters.length} unique stories. Fetching article images…` });
+    await exaImages.enrichClustersWithImages(clusters, { showImages: settings.showImages });
     await storage.setClusters({ clusters, generatedAt: new Date().toISOString() });
     send('status', { message: `${clusters.length} unique stories. Checking read history…` });
 
@@ -668,6 +731,23 @@ async function runDigestSSE(req, res) {
     // ── Background enrichment (doesn't block SSE response) ──────────────────
     const enrichAsync = async () => {
       try {
+        // Build Thought Leadership deck from this run's entries tagged as TL.
+        // Dedupe against what's already been read so fresh refreshes drop items
+        // the user has swiped through.
+        try {
+          const tlEntries = entries.filter(e => e.kind === 'thought_leadership');
+          if (tlEntries.length) {
+            const alreadyRead = await thoughtLeadership.getReadTLIds();
+            const tlCards = await thoughtLeadership.buildThoughtLeadershipDeck(
+              tlEntries, digestModel, alreadyRead
+            );
+            if (tlCards.length) {
+              digest.thought_leadership = tlCards;
+              console.log(`[cron/digest] thought leadership: ${tlCards.length} cards`);
+            }
+          }
+        } catch (e) { console.warn('[cron/digest] thought-leadership error:', e.message); }
+
         // Run topic clusters and story enricher in parallel — deep dives appear ASAP
         const [clusters_result] = await Promise.all([
           topicClusters.buildTopicClusters(digest, settings.internetFallback, digestModel)
@@ -681,13 +761,44 @@ async function runDigestSSE(req, res) {
             .catch(e => console.error('[cron/digest] story enricher error:', e.message)),
         ]);
 
-        if (settings.internetFallback) {
+        // Carousel "charts of the day" (Exa-sourced thumbnails in top_today) — skipped
+        // entirely when the admin-only Show Images / Chart toggle is off, so we don't
+        // burn web-search credits on assets the user has chosen to hide.
+        if (settings.internetFallback && settings.showImages !== false) {
           const topHeadlines  = (digest.top_today || []).map(s => s.headline);
           const lastRun2      = await storage.getLastRun();
           const seenChartUrls = new Set((lastRun2?.charts || []).map(c => c.sourceUrl).filter(Boolean));
           digest.charts = await charts.fetchChartsOfDay(topHeadlines, seenChartUrls, digestModel)
             .catch(e => { console.error('[cron/digest] charts error:', e.message); return []; });
+        } else if (settings.showImages === false) {
+          console.log('[cron/digest] showImages=false — skipping charts-of-day carousel');
         }
+
+        // Pre-generate "Chart of the Day" (v2: scrapes user-configured predefined
+        // sources — NBC economic indicators + Twitter/X accounts — and returns up
+        // to 5 charts). No Exa, no LLM. Respects the admin-only showImages toggle.
+        if (settings.showImages !== false) {
+          try {
+            const payload = await chartOfDay.getCharts({ dateKey, force: true });
+            digest.chartOfDay = payload;
+            console.log(`[cron/digest] chart-of-day v2 cached for ${dateKey} (${payload.charts.length} charts)`);
+          } catch (e) { console.error('[cron/digest] chart-of-day v2 prefetch error:', e.message); }
+        } else {
+          console.log('[cron/digest] showImages=false — skipping chart-of-day prefetch');
+        }
+
+        // 30-day TTL sweep (digest cache, read history, temp KV rows). Feedback
+        // and notebook are NEVER swept here — they are user data.
+        try {
+          const swept = await supa.purgeOldCache({ days: 30 });
+          console.log('[cron/digest] 30d sweep:', JSON.stringify(swept));
+        } catch (e) { console.warn('[cron/digest] sweep failed:', e.message); }
+
+        // 365-day notebook idle purge (removes entries not touched in a year).
+        try {
+          const { purged } = await supa.purgeIdleNotebook({ days: 365 });
+          if (purged) console.log(`[cron/digest] notebook purge: ${purged} entries`);
+        } catch (e) { console.warn('[cron/digest] notebook purge failed:', e.message); }
 
         await storage.setLastRun(digest);
         // Persist fully-enriched digest to Supabase digest_cache

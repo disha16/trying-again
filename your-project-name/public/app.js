@@ -114,10 +114,51 @@ function renderCategory(cat) {
   if (cat === 'top_today') {
     renderTopicClusters(digestData?.topic_clusters || []);
     loadChartsOfDay();
+    renderThoughtLeadership(digestData?.thought_leadership || []);
   } else {
     $('#topicClusters').classList.add('hidden');
     $('#chartsOfDay').classList.add('hidden');
+    $('#thoughtLeadership')?.classList.add('hidden');
   }
+}
+
+/* ── Thought Leadership deck (tinder-card TL;DRs from Substacks) ── */
+function renderThoughtLeadership(cards) {
+  const block = $('#thoughtLeadership');
+  const deck  = $('#tlDeck');
+  if (!block || !deck) return;
+  if (!cards || !cards.length) { block.classList.add('hidden'); return; }
+  block.classList.remove('hidden');
+  deck.innerHTML = cards.map((c, i) => `
+    <article class="tl-card" data-tl-id="${c.id}" data-idx="${i}">
+      ${c.image ? `<div class="tl-img" style="background-image:url('${c.image}')"></div>` : ''}
+      <div class="tl-body">
+        <div class="tl-source">${c.source}</div>
+        <h3 class="tl-headline">${c.title}</h3>
+        <p class="tl-tldr">${c.tldr}</p>
+        ${Array.isArray(c.keyPoints) && c.keyPoints.length ? `<ul class="tl-points">${c.keyPoints.map(p => `<li>${p}</li>`).join('')}</ul>` : ''}
+        <div class="tl-actions">
+          <button class="tl-done" data-id="${c.id}">Mark read</button>
+          <span class="tl-meta">∼ ${c.readingMinutes || 1} min</span>
+        </div>
+      </div>
+    </article>
+  `).join('');
+  deck.querySelectorAll('.tl-done').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = e.currentTarget.dataset.id;
+      try {
+        await fetch('/api/mark-read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ headline: id, category: 'thought_leadership', source: 'thought_leadership' }),
+        });
+      } catch {}
+      const card = e.currentTarget.closest('.tl-card');
+      card?.classList.add('tl-card-read');
+      setTimeout(() => card?.remove(), 300);
+    });
+  });
 }
 
 /* ── Topics block ── */
@@ -205,6 +246,14 @@ function renderDeck() {
       <div class="deck-card-inner">
         <div class="deck-progress-bar"><div class="deck-progress-fill" id="deckProgress"></div></div>
         <span class="deck-counter">${deckIndex + 1} / ${deckItems.length}</span>
+        <div class="deck-feedback-top">
+          <button class="deck-feedback-mini deck-up"   aria-label="Good story" title="Good story" data-vote="up">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 1.314C12.438-3.248 23.534 4.735 8 15-7.534 4.736 3.562-3.248 8 1.314z"/></svg>
+          </button>
+          <button class="deck-feedback-mini deck-down" aria-label="Not for me"  title="Not for me"  data-vote="down">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 14s-5.5-3.2-5.5-7.2A3 3 0 0 1 8 4.4a3 3 0 0 1 5.5 2.4C13.5 10.8 8 14 8 14z"/></svg>
+          </button>
+        </div>
         ${item.image ? `<img class="deck-image" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
         <div class="deck-headline">${esc(item.headline)}</div>
         ${item.description ? `<div class="deck-desc">${esc(item.description)}</div>` : ''}
@@ -212,8 +261,6 @@ function renderDeck() {
         <div class="deck-footer">
           ${badge}
           <div class="deck-actions">
-            <button class="deck-btn deck-feedback deck-up"   title="Good story" data-vote="up">👍</button>
-            <button class="deck-btn deck-feedback deck-down" title="Not for me"  data-vote="down">👎</button>
             <button class="deck-btn deck-chat"     title="Ask about this story">💬</button>
             <button class="deck-btn deck-notebook" title="Add to notebook">📓</button>
             <button class="deck-btn deck-skip"     title="Skip">→</button>
@@ -256,13 +303,13 @@ function renderDeck() {
   panel.querySelector('.deck-active .deck-skip')?.addEventListener('click', () => advanceDeck(false));
   panel.querySelector('.deck-active .deck-chat')?.addEventListener('click', () => openChatFromCard(deckItems[deckIndex]));
   panel.querySelector('.deck-active .deck-notebook')?.addEventListener('click', () => openNotebookModal(deckItems[deckIndex]));
-  panel.querySelectorAll('.deck-active .deck-feedback').forEach(btn => {
+  panel.querySelectorAll('.deck-active .deck-feedback-mini').forEach(btn => {
     btn.addEventListener('click', () => {
       const item = deckItems[deckIndex];
       if (!item) return;
       const vote = btn.dataset.vote;
       // Visual feedback — highlight the voted button
-      panel.querySelectorAll('.deck-active .deck-feedback').forEach(b => b.classList.remove('voted'));
+      panel.querySelectorAll('.deck-active .deck-feedback-mini').forEach(b => b.classList.remove('voted'));
       btn.classList.add('voted');
       const now = new Date();
       const dk = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
@@ -559,12 +606,6 @@ const MODEL_PICKERS = [
 async function loadModel() {
   const s = await fetch('/api/settings').then(r => r.json()).catch(() => ({}));
   window._settingsSections = s.sections || []; // expose for renderInnerTabs labels
-  const keyHint = $('#anthropicKeyHint');
-  if (keyHint) {
-    keyHint.textContent = s.anthropicApiKeyConfigured
-      ? 'Key configured. Paste a new key and click Save to replace it, or leave blank and Save to clear.'
-      : 'Required to use Claude Sonnet/Opus/Haiku models below. Stored locally only.';
-  }
   for (const id of MODEL_PICKERS) {
     const picker = $(`#${id}`);
     if (!picker) continue;
@@ -622,21 +663,35 @@ $('#internetFallbackToggle')?.addEventListener('change', async e => {
   showSaveStatus(e.target.checked ? 'Internet fallback on' : 'Internet fallback off');
 });
 
-/* ── Anthropic API key save ── */
-$('#saveAnthropicKey')?.addEventListener('click', async () => {
-  const input = $('#anthropicApiKey');
-  if (!input) return;
-  const value = input.value.trim();
-  await fetch('/api/settings', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ anthropicApiKey: value }),
-  });
-  input.value = '';
-  const hint = $('#anthropicKeyHint');
-  if (hint) hint.textContent = value ? 'Key saved. You can now select Claude Sonnet/Opus/Haiku in the dropdowns.' : 'Key cleared.';
-  showSaveStatus(value ? 'Anthropic API key saved' : 'Anthropic API key cleared');
+/* ── Last run cache panel (Settings) ─────────────────────────────── */
+async function loadCacheIndex() {
+  const el = document.getElementById('cacheIndex');
+  if (!el) return;
+  try {
+    const list = await fetch('/api/cache-index').then(r => r.json());
+    if (!Array.isArray(list) || !list.length) { el.innerHTML = '<p class="meta">No cached digests yet.</p>'; return; }
+    const rows = list.map(r => {
+      const ran = new Date(r.ranAt);
+      const when = ran.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+      const badge = r.enriched
+        ? '<span class="cache-badge cache-enriched">enriched</span>'
+        : '<span class="cache-badge cache-core">core only</span>';
+      return `<div class="cache-row"><div class="cache-date">${r.dateKey}</div><div class="cache-meta">cached ${when} ${badge}</div></div>`;
+    }).join('');
+    el.innerHTML = rows;
+  } catch (e) {
+    el.innerHTML = `<p class="meta" style="color:#b4635a">Could not load cache index: ${e.message}</p>`;
+  }
+}
+// Refresh whenever the settings view is shown
+document.addEventListener('click', e => {
+  const tab = e.target.closest('[data-view="settings"]');
+  if (tab) setTimeout(loadCacheIndex, 150);
 });
+// Also load once on boot so the data is fresh when the user opens settings
+setTimeout(loadCacheIndex, 800);
+
+
 
 /* ── Load last run on startup ── */
 async function loadLastRun() {
@@ -671,7 +726,7 @@ function renderSources(sources) {
   $('#sourceList').innerHTML = sources.map(s => `
     <li class="source-item" data-id="${s.id}">
       <div class="source-info">
-        <span class="source-name ${s.enabled ? '' : 'disabled'}">${esc(s.name)}</span>
+        <span class="source-name ${s.enabled ? '' : 'disabled'}">${esc(s.name)}${s.kind === 'thought_leadership' ? ' <span class="src-kind-badge">TL</span>' : ''}</span>
         <span class="source-email">${s.email ? esc(s.email) : '<span style="color:#f59e0b">⚠ No sender email</span>'}</span>
         ${s.url ? `<a class="source-url" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>` : ''}
       </div>
@@ -706,16 +761,23 @@ $('#addSourceBtn').addEventListener('click', async () => {
   const nameInput = $('#newSourceInput');
   const emailInput = $('#newSourceEmail');
   const urlInput = $('#newSourceUrl');
+  const kindInput = $('#newSourceKind');
   const name = nameInput.value.trim();
   if (!name) { nameInput.focus(); return; }
   await fetch('/sources', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email: emailInput.value.trim(), url: urlInput.value.trim() }),
+    body: JSON.stringify({
+      name,
+      email: emailInput.value.trim(),
+      url: urlInput.value.trim(),
+      kind: kindInput?.value || 'newsletter',
+    }),
   });
   nameInput.value = '';
   emailInput.value = '';
   urlInput.value = '';
+  if (kindInput) kindInput.value = 'newsletter';
   loadSources();
 });
 
@@ -1406,9 +1468,7 @@ async function savePersona() {
   });
 }
 
-/* ── Chart of the Day (Chart.js) ── */
-let _chartInstance = null;
-
+/* ── Chart of the Day v2 (predefined sources: up to 5 image cards) ── */
 async function loadChartsOfDay() {
   const el = $('#chartsOfDay');
   if (!el) return;
@@ -1419,18 +1479,45 @@ async function loadChartsOfDay() {
     <div class="cotd-card">
       <div class="cotd-loading">
         <div class="cotd-spinner"></div>
-        <span>Fetching latest data…</span>
+        <span>Loading charts…</span>
       </div>
     </div>`;
 
   try {
-    const data = await fetch('/api/chart-of-day').then(r => r.json());
+    const resp = await fetch('/api/chart-of-day');
+    // 204 → showImages is off; quietly hide the section.
+    if (resp.status === 204) { el.classList.add('hidden'); return; }
+    const data = await resp.json();
     if (data.error) throw new Error(data.error);
-    renderChartOfDay(el, data);
+    renderChartOfDayV2(el, data);
   } catch (e) {
-    el.innerHTML = `<div class="charts-title">Chart of the Day</div><p class="cotd-error">Could not load chart: ${esc(e.message)}</p>`;
+    el.innerHTML = `<div class="charts-title">Chart of the Day</div><p class="cotd-error">Could not load charts: ${esc(e.message)}</p>`;
   }
 }
+
+function renderChartOfDayV2(el, payload) {
+  const charts = Array.isArray(payload?.charts) ? payload.charts : [];
+  if (!charts.length) {
+    el.innerHTML = `<div class="charts-title">Chart of the Day</div><p class="cotd-error">No charts available right now. Check your chart sources in Settings.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="charts-title">Chart of the Day</div>
+    <div class="cod-grid">
+      ${charts.map(c => `
+        <a href="${esc(c.sourceUrl || '#')}" target="_blank" rel="noopener" class="cod-card">
+          <img class="cod-card-img" src="${esc(c.image)}" alt="${esc(c.title || '')}" loading="lazy" onerror="this.style.display='none'" />
+          <div class="cod-card-body">
+            <h4 class="cod-card-title">${esc(c.title || 'Chart')}</h4>
+            <span class="cod-card-src">${esc(c.source || '')}</span>
+          </div>
+        </a>
+      `).join('')}
+    </div>`;
+}
+
+// Retained for backwards compatibility but no longer invoked by v2.
+let _chartInstance = null;
 
 function renderChartOfDay(el, data) {
   if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
@@ -1766,3 +1853,190 @@ function showTrainerStatus(msg, type = 'success') {
   el.className = `trainer-status ${type}`;
   el.classList.remove('hidden');
 }
+
+
+/* ── Chart-of-day sources (Settings panel) ──────────────────────────── */
+async function loadChartSources() {
+  const list = $('#chartSourceList');
+  if (!list) return;
+  try {
+    const sources = await fetch('/api/chart-sources').then(r => r.json());
+    _chartSourcesCache = Array.isArray(sources) ? sources : [];
+    list.innerHTML = _chartSourcesCache.map((s, i) => `
+      <li class="source-item">
+        <div class="source-info">
+          <span class="source-name">${esc(s.name)} <span class="src-kind-badge">${s.kind === 'twitter' ? 'X' : 'WEB'}</span></span>
+          <a class="source-url" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>
+        </div>
+        <button class="btn-danger" data-idx="${i}">Remove</button>
+      </li>
+    `).join('');
+    list.querySelectorAll('button.btn-danger').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = +btn.dataset.idx;
+        _chartSourcesCache.splice(idx, 1);
+        await saveChartSources();
+        loadChartSources();
+      });
+    });
+  } catch (e) { list.innerHTML = `<li class="meta">Could not load chart sources: ${esc(e.message)}</li>`; }
+}
+
+let _chartSourcesCache = [];
+
+async function saveChartSources() {
+  await fetch('/api/chart-sources', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ sources: _chartSourcesCache }),
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  $('#addChartSrcBtn')?.addEventListener('click', async () => {
+    const name = $('#newChartSrcName')?.value.trim();
+    const url  = $('#newChartSrcUrl')?.value.trim();
+    const kind = $('#newChartSrcKind')?.value || 'html';
+    if (!name || !/^https?:\/\//.test(url || '')) return;
+    _chartSourcesCache.push({ name, url, kind, limit: 2 });
+    await saveChartSources();
+    $('#newChartSrcName').value = '';
+    $('#newChartSrcUrl').value  = '';
+    loadChartSources();
+  });
+  // Load when Settings tab is shown. Easiest: hook into existing tab-click.
+  document.querySelectorAll('.tab[data-tab="settings"]').forEach(t => {
+    t.addEventListener('click', () => { setTimeout(loadChartSources, 50); });
+  });
+});
+
+
+/* ── First-run walkthrough + Report-an-issue ───────────────────────── */
+(() => {
+  const STORAGE_KEY = 'wkSeenAt';
+  const SLIDES = [
+    {
+      emoji: '👋',
+      title: 'Welcome, <em>Prof Gupta</em>',
+      body: 'A 30-second tour of your inbox-powered digest. You can skip at any time.',
+    },
+    {
+      emoji: '📰',
+      title: 'The <em>Digest</em>',
+      body: `Your homepage. A fresh run lands every afternoon at 3pm ET — you don't need to hit Refresh unless you think the news is stale.`,
+    },
+    {
+      emoji: '💬',
+      title: '<em>Chat</em> with your inbox',
+      body: 'Open any card and tap the chat bubble, or go to the Chat tab. Ask anything — I can read the full text of every newsletter you\'ve forwarded.',
+    },
+    {
+      emoji: '📓',
+      title: 'The <em>Notebook</em>',
+      body: 'Save observations, recurring themes, or questions. I surface related notes when a similar story shows up later.',
+    },
+    {
+      emoji: '📬',
+      title: '<em>Sources</em> — managed by forwarding',
+      body: `Add sources here. You can't import them automatically — forward newsletters to Gmail first, then register the sender address here. <em>(Oops — no magic add button.)</em>`,
+    },
+    {
+      emoji: '🎭',
+      title: '<em>Persona</em>',
+      body: `Tune voice, length, and section priorities. I'll re-read your preferences before every run.`,
+    },
+    {
+      emoji: '🛟',
+      title: 'A few last notes',
+      body: `If the digest looks sparse, it might be a slow news day — try again in a few hours. For anything else, use <b>Report an issue</b> (top right). I read every one.`,
+    },
+    {
+      emoji: '💌',
+      title: 'Try <em>Report an issue</em>',
+      body: `<p style="margin:0 0 6px">Send a quick note below if anything feels off. You can also use the top-right link any time.</p>`,
+      extra: `<textarea id="wkIssueText" placeholder="Optional — skip to finish."></textarea>`,
+      isLast: true,
+    },
+  ];
+
+  let idx = 0;
+  const overlay = document.getElementById('walkthroughOverlay');
+  if (!overlay) return;
+  const slidesEl = document.getElementById('wkSlides');
+  const dotsEl = document.getElementById('wkDots');
+  const nextBtn = document.getElementById('wkNext');
+  const skipBtn = document.getElementById('wkSkip');
+
+  function render() {
+    const s = SLIDES[idx];
+    slidesEl.innerHTML = `
+      <div class="wk-slide">
+        <div class="wk-graphic">${s.emoji}</div>
+        <div class="wk-title">${s.title}</div>
+        <div class="wk-body">${s.body}${s.extra || ''}</div>
+      </div>
+    `;
+    dotsEl.innerHTML = SLIDES.map((_, i) => `<span class="wk-dot ${i === idx ? 'active' : ''}"></span>`).join('');
+    nextBtn.textContent = s.isLast ? 'Finish' : 'Next';
+  }
+
+  function open() { overlay.classList.remove('hidden'); idx = 0; render(); }
+  function close() {
+    overlay.classList.add('hidden');
+    try { localStorage.setItem(STORAGE_KEY, new Date().toISOString()); } catch {}
+    // If user typed a message on the final slide, submit it as an issue.
+    const txt = document.getElementById('wkIssueText')?.value?.trim();
+    if (txt) submitIssue(txt, { source: 'walkthrough' }).catch(() => {});
+  }
+
+  nextBtn?.addEventListener('click', () => {
+    if (idx >= SLIDES.length - 1) { close(); return; }
+    idx++; render();
+  });
+  skipBtn?.addEventListener('click', close);
+
+  // Show on first visit.
+  try {
+    if (!localStorage.getItem(STORAGE_KEY)) {
+      setTimeout(open, 400);
+    }
+  } catch {}
+
+  // Expose for manual replay (e.g. from future Help link)
+  window._openWalkthrough = open;
+
+  // Report-an-issue wiring
+  const issueModal = document.getElementById('issueModal');
+  const issueText  = document.getElementById('issueText');
+  const issueStat  = document.getElementById('issueStatus');
+  document.getElementById('reportIssueBtn')?.addEventListener('click', () => {
+    issueModal.classList.remove('hidden');
+    setTimeout(() => issueText?.focus(), 50);
+  });
+  document.getElementById('issueCancel')?.addEventListener('click', () => {
+    issueModal.classList.add('hidden');
+    issueText.value = ''; issueStat.textContent = '';
+  });
+  document.getElementById('issueSubmit')?.addEventListener('click', async () => {
+    const txt = issueText?.value.trim();
+    if (!txt) { issueText?.focus(); return; }
+    issueStat.textContent = 'Sending…';
+    try {
+      await submitIssue(txt, { source: 'nav' });
+      issueStat.textContent = 'Thanks — sent. You can close this.';
+      issueText.value = '';
+      setTimeout(() => { issueModal.classList.add('hidden'); issueStat.textContent = ''; }, 1200);
+    } catch (e) {
+      issueStat.textContent = 'Could not send. Please try again.';
+    }
+  });
+
+  async function submitIssue(body, meta = {}) {
+    const r = await fetch('/api/report-issue', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ body, meta, url: location.href }),
+    });
+    if (!r.ok) throw new Error('submit failed');
+  }
+})();

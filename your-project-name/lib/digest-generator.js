@@ -184,11 +184,11 @@ Return ONLY a valid JSON object — no markdown, no extra text:
 
 const SYSTEM = buildSystemPrompt();
 
-async function _callModel(model, prompt, systemOverride) {
+// Direct single-provider dispatch (no fallback). Use _callModel for safe calls with fallback.
+async function _callModelDirect(model, prompt, systemOverride) {
   const sys = systemOverride || SYSTEM;
   if (model === 'claude-cli') {
     console.log('[digest] model: claude-cli (subprocess)');
-    // Retry on transient Anthropic 5xx / overload errors
     let lastErr;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try { return await callClaudeCLI(sys, prompt); }
@@ -217,6 +217,68 @@ async function _callModel(model, prompt, systemOverride) {
   const u = response.usage;
   console.log(`[digest] model: ${model} | in: ${u.prompt_tokens}, out: ${u.completion_tokens}`);
   return response.choices[0].message.content.trim();
+}
+
+// Build a cross-provider fallback chain starting from `primary`.
+// Order: primary → sibling models in same family → Anthropic Haiku → Qwen Turbo → Groq Llama → claude-cli.
+// Only includes providers whose credentials are available.
+function buildFallbackChain(primary) {
+  const chain = [];
+  const seen = new Set();
+  const add = (m) => { if (m && !seen.has(m)) { chain.push(m); seen.add(m); } };
+
+  // 1. Primary first (or sensible default)
+  add(primary || 'claude-haiku-4-5-20251001');
+
+  // 2. Same-family siblings as primary
+  const families = [
+    { list: ANTHROPIC_MODELS, envKey: 'ANTHROPIC_API_KEY' },
+    { list: GROQ_MODELS,      envKey: 'GROQ_API_KEY'      },
+    { list: QWEN_MODELS,      envKey: 'QWEN_API_KEY'      },
+    { list: DEEPSEEK_MODELS,  envKey: 'DEEPSEEK_API_KEY'  },
+  ];
+
+  // 3. Cross-provider defaults — fastest / cheapest per family, only if key is available
+  const defaults = [
+    { model: 'claude-haiku-4-5-20251001', envKey: 'ANTHROPIC_API_KEY' },
+    { model: 'qwen-turbo',                envKey: 'QWEN_API_KEY'      },
+    { model: 'llama-3.3-70b-versatile',   envKey: 'GROQ_API_KEY'      },
+    { model: 'llama-3.1-8b-instant',      envKey: 'GROQ_API_KEY'      },
+  ];
+  for (const { model, envKey } of defaults) {
+    if (process.env[envKey]) add(model);
+  }
+
+  return chain;
+}
+
+// True when an error indicates the provider is unavailable (credits/auth/quota/5xx),
+// so we should move to the next model in the fallback chain instead of crashing.
+function isProviderFailure(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  if (status === 401 || status === 402 || status === 403 || status === 429) return true;
+  if (status && status >= 500 && status < 600) return true;
+  const msg = String(err.message || err).toLowerCase();
+  return /api.?key|unauthori|forbidden|credits?|quota|insufficient|balance|rate.?limit|overload|internal server|service unavailable|unavailable|billing|payment|no.?api.?key|not.?set/.test(msg);
+}
+
+// Safe LLM dispatch with cross-provider fallback chain.
+async function _callModel(model, prompt, systemOverride) {
+  const chain = buildFallbackChain(model);
+  let lastErr;
+  for (let i = 0; i < chain.length; i++) {
+    const m = chain[i];
+    try {
+      if (i > 0) console.warn(`[llm-fallback] trying #${i+1}/${chain.length}: ${m}`);
+      return await _callModelDirect(m, prompt, systemOverride);
+    } catch (err) {
+      lastErr = err;
+      if (!isProviderFailure(err)) throw err; // non-recoverable (bad prompt, etc.)
+      console.warn(`[llm-fallback] ${m} failed (${err.status || ''} ${String(err.message || '').slice(0,120)}). Falling back…`);
+    }
+  }
+  throw lastErr || new Error('All LLM providers failed');
 }
 
 async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readState = {}, customSections = [], persona = null) {
