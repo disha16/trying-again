@@ -181,8 +181,11 @@ async function searchGDELT(query, opts = {}) {
   }));
 }
 
+// Some users save env vars in lowercase on Vercel. Accept either casing.
+function _serperKey() { return process.env.SERPER_API_KEY || process.env.serper_api_key || ''; }
+
 async function searchSerper(query, opts = {}) {
-  const key = process.env.SERPER_API_KEY;
+  const key = _serperKey();
   if (!key) throw new Error('SERPER_API_KEY not set');
   // Use the news endpoint for fresh, news-flavoured SERP results.
   const r = await fetchWithTimeout('https://google.serper.dev/news', {
@@ -333,7 +336,7 @@ async function search(query, opts = {}) {
   }
   const chain = [
     { name: 'exa',        fn: searchExa,        enabled: exaAllowed && !!process.env.EXA_API_KEY },
-    { name: 'serper',     fn: searchSerper,     enabled: !!process.env.SERPER_API_KEY },
+    { name: 'serper',     fn: searchSerper,     enabled: !!_serperKey() },
     { name: 'tavily',     fn: searchTavily,     enabled: !!process.env.TAVILY_API_KEY },
     { name: 'langsearch', fn: searchLangSearch, enabled: !!process.env.LANGSEARCH_API_KEY },
     // GDELT is keyless and free — always enabled unless explicitly disabled.
@@ -382,7 +385,7 @@ function hasRealSearchProvider() {
   return !!(
     process.env.EXA_API_KEY ||
     process.env.TAVILY_API_KEY ||
-    process.env.SERPER_API_KEY ||
+    _serperKey() ||
     process.env.LANGSEARCH_API_KEY ||
     process.env.MOJEEK_API_KEY ||
     (process.env.SEARXNG_URL && process.env.SEARXNG_URL !== 'disabled') ||

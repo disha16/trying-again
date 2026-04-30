@@ -34,7 +34,7 @@ function isUsable(imgUrl) {
 }
 
 async function serperImage(query) {
-  const key = process.env.SERPER_API_KEY;
+  const key = process.env.SERPER_API_KEY || process.env.serper_api_key;
   if (!key) return null;
   try {
     const r = await fetchWithTimeout('https://google.serper.dev/images', {
