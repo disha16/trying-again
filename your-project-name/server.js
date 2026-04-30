@@ -165,6 +165,15 @@ app.get('/api/debug-storage', async (req, res) => {
       settings_anthropic_key_set: !!(settings.anthropicApiKey),
       stored_key_preview: storedKey ? storedKey.slice(0,20) + '...' + storedKey.slice(-6) : 'NOT SET',
       env_key_preview: envKey ? envKey.slice(0,20) + '...' + envKey.slice(-6) : 'NOT SET',
+      search_providers: {
+        EXA_API_KEY:        !!process.env.EXA_API_KEY,
+        SERPER_API_KEY:     !!process.env.SERPER_API_KEY,
+        TAVILY_API_KEY:     !!process.env.TAVILY_API_KEY,
+        LANGSEARCH_API_KEY: !!process.env.LANGSEARCH_API_KEY,
+        BRAVE_API_KEY:      !!process.env.BRAVE_API_KEY,
+        MOJEEK_API_KEY:     !!process.env.MOJEEK_API_KEY,
+        SEARXNG_URL:        !!process.env.SEARXNG_URL,
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
