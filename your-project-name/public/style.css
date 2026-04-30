@@ -554,7 +554,8 @@ code {
 .deck-stack {
   position: relative;
   margin: 16px 0;
-  min-height: 420px;          /* fallback so absolute cards never overlay the next section */
+  min-height: 0;
+  /* height is set imperatively from the active card's rendered height */
 }
 .deck-card {
   position: absolute;
@@ -573,8 +574,18 @@ code {
 }
 .deck-card.deck-active { z-index: 10; cursor: grab; }
 .deck-card.deck-active:active { cursor: grabbing; }
-.deck-card-inner { position: relative; padding: 24px; height: auto; display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-light); }
-.deck-image { width: calc(100% + 48px); margin: -24px -24px 0; max-height: 160px; object-fit: cover; border-radius: var(--radius) var(--radius) 0 0; display: block; }
+.deck-card-inner { position: relative; padding: 24px; min-height: 420px; display: flex; flex-direction: row; gap: 24px; box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-light); }
+/* Portrait image on the LEFT, 1/3 of the card width, full card height. */
+.deck-image { flex: 0 0 33%; width: 33%; min-width: 160px; height: auto; align-self: stretch; max-height: none; object-fit: cover; border-radius: 14px; margin: 0; display: block; }
+/* Text column fills the rest */
+.deck-card-inner > :not(.deck-image):not(.deck-feedback-top) { /* nothing */ }
+.deck-card-inner .deck-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* If a card has no image, let the body span full width */
+.deck-card-inner:not(:has(.deck-image)) .deck-body { flex: 1 1 100%; }
+@media (max-width: 640px) {
+  .deck-card-inner { flex-direction: column; min-height: 380px; gap: 14px; }
+  .deck-image { width: 100%; min-width: 0; flex: 0 0 auto; height: 160px; }
+}
 .deck-progress-bar { display: none; }
 .deck-progress-fill { display: none; }
 .deck-counter { font-size: .72rem; color: var(--muted); letter-spacing: .5px; }
@@ -629,7 +640,7 @@ code {
 .tc-empty { font-size: .8rem; color: var(--muted); padding: 12px 0; text-align: center; }
 
 /* Mini-deck cards (open deep-dive angles) */
-.mini-stack { position: relative; margin-top: 4px; min-height: 380px; }
+.mini-stack { position: relative; margin-top: 4px; min-height: 0; }
 .mini-card {
   position: absolute; top: 0; left: 0; right: 0; background: var(--surface);
   border: 1px solid var(--border); border-radius: 14px;
@@ -1096,7 +1107,6 @@ html.hide-images #chartsOfDay { display: none !important; }
 
 /* ── Report-an-issue nav button ─────────────────────────────────── */
 .nav-report {
-  margin-left: auto;
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border-light);
@@ -1243,13 +1253,14 @@ html[data-theme="dark"] .deck-sig {
   color: var(--muted);
 }
 
-/* Dark-mode toggle button in nav */
+/* Dark-mode toggle button in nav (sits immediately left of Report an issue) */
 .nav-dark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 36px;
+  margin-left: auto;
   margin-right: 8px;
   background: transparent;
   border: 1px solid var(--border);

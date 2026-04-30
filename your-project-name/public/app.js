@@ -297,26 +297,27 @@ function renderDeck() {
     return `
     <div class="deck-card ${isActive ? 'deck-active' : ''}" style="--offset:${offset}">
       <div class="deck-card-inner">
-        <div class="deck-progress-bar"><div class="deck-progress-fill" id="deckProgress"></div></div>
-        <span class="deck-counter">${deckIndex + 1} / ${deckItems.length}</span>
         <div class="deck-feedback-top">
           <button class="deck-feedback-mini deck-up"   aria-label="Good story" title="Good story" data-vote="up">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.63-10.1-9.25C.17 8.82 1.9 5.5 5.1 5.5c1.94 0 3.48 1.04 4.4 2.55h1c.92-1.51 2.46-2.55 4.4-2.55 3.2 0 4.93 3.32 3.2 6.25C19.5 16.37 12 21 12 21z"/></svg>
           </button>
           <button class="deck-feedback-mini deck-down" aria-label="Not for me"  title="Not for me"  data-vote="down">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.63-10.1-9.25C.17 8.82 1.9 5.5 5.1 5.5c1.94 0 3.48 1.04 4.4 2.55h1c.92-1.51 2.46-2.55 4.4-2.55 3.2 0 4.93 3.32 3.2 6.25C19.5 16.37 12 21 12 21zm-1-12.8-1.6 2.05 2.4 1.75-2 1.1 1.8 2.5-1.45 1.05L8.5 13.3l-2.1 1.2 2.6-3.7-2.4-1.7 4.4-.9z"/></svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.2 19.72C5.1 15.14 1.5 11.94 1.5 8.05 1.5 5.11 3.82 3 6.7 3c1.67 0 3.28.78 4.3 2.02L12 6l1-.98C14.02 3.78 15.63 3 17.3 3c2.88 0 5.2 2.11 5.2 5.05 0 .57-.08 1.11-.22 1.63l-3.05-1.52-1.23 2.46 3.01 1.5c-.55.71-1.22 1.45-2 2.23-.35-.13-.72-.22-1.11-.22a3 3 0 0 0-2.9 2.27l-2.32-1.16 1.23-2.46-4.9-2.44-1.23 2.45 2.44 1.22-2.45 1.22 1.24 2.46 2.73-1.37a3 3 0 0 0 3.07 2.28c.25 0 .49-.03.72-.09L12 21.35z"/></svg>
           </button>
         </div>
         ${item.image ? `<img class="deck-image" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
-        <div class="deck-headline">${esc(item.headline)}</div>
-        ${item.description ? `<div class="deck-desc">${esc(item.description)}</div>` : ''}
-        ${item.context ? `<div class="deck-context">${esc(item.context)}</div>` : ''}
-        <div class="deck-footer">
-          ${badge}
-          <div class="deck-actions">
-            <button class="deck-btn deck-chat"     title="Ask about this story">💬</button>
-            <button class="deck-btn deck-notebook" title="Add to notebook">📓</button>
-            <button class="deck-btn deck-skip"     title="Skip">→</button>
+        <div class="deck-body">
+          <span class="deck-counter">${deckIndex + 1} / ${deckItems.length}</span>
+          <div class="deck-headline">${esc(item.headline)}</div>
+          ${item.description ? `<div class="deck-desc">${esc(item.description)}</div>` : ''}
+          ${item.context ? `<div class="deck-context">${esc(item.context)}</div>` : ''}
+          <div class="deck-footer">
+            ${badge}
+            <div class="deck-actions">
+              <button class="deck-btn deck-chat"     title="Ask about this story">💬</button>
+              <button class="deck-btn deck-notebook" title="Add to notebook">📓</button>
+              <button class="deck-btn deck-skip"     title="Skip">→</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2080,13 +2081,13 @@ document.addEventListener('DOMContentLoaded', () => {
     {
       emoji: '🛟',
       title: 'A few last notes',
-      body: `If the digest looks sparse, it might be a slow news day — try again in a few hours. For anything else, use <b>Report an issue</b> (top right). I read every one.`,
+      body: `If the digest looks sparse, it might be a slow news day — try again in a few hours.<br><br>This website is <b>optimized for web</b>.`,
     },
     {
-      emoji: '💌',
-      title: 'Try <em>Report an issue</em>',
-      body: `<p style="margin:0 0 6px">Send a quick note below if anything feels off. You can also use the top-right link any time.</p>`,
-      extra: `<textarea id="wkIssueText" placeholder="Optional — skip to finish."></textarea>`,
+      emoji: '🚀',
+      title: 'You\'re all set',
+      body: `<p style="margin:0">Enjoy your daily briefing, Prof Gupta.</p>`,
+      extra: ``,
       isLast: true,
     },
   ];
@@ -2136,6 +2137,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Expose for manual replay (e.g. from future Help link)
   window._openWalkthrough = open;
+  document.getElementById('replayTutorialBtn')?.addEventListener('click', open);
 
   // Dark-mode toggle wiring
   (function initDarkMode() {
