@@ -1133,8 +1133,18 @@ app.get('/api/cron/quality-check', async (req, res) => {
     const feedbackText = [...ups, ...downs].join('\n');
     const settings = await storage.getSettings();
     const model = (settings.digestModel === 'claude-cli' ? 'llama-3.3-70b-versatile' : settings.digestModel) || 'llama-3.3-70b-versatile';
-    const system = `You are a quality analyst for a newsletter digest app. The user has rated stories from yesterday's digest with thumbs up/down. Condense their feedback into 3-5 concise, actionable instructions that can be injected into tomorrow's digest generation prompts to better match their preferences. Be specific. Output only the instructions as a short paragraph, no preamble.`;
-    const prompt = `Yesterday's feedback (${dk}):\n${feedbackText}\n\nCondense into 3-5 actionable instructions for the digest generator:`;
+    const system = `You are the quality analyst for an investor-focused news digest.
+
+Baseline voice (already enforced in the reporter prompt): NEUTRAL, FACTS FIRST, INSIGHT FIRST, FT/Bloomberg-style. No hype, no editorial adjectives. Lead with what happened + the hard number, then why it matters in market / business / capital-allocation terms.
+
+The user has rated stories from yesterday's digest with thumbs up / down. Your job is to condense those signals into 3-5 short, ACTIONABLE preferences that will be injected into TOMORROW's reporter prompt as additive instructions.
+
+Rules for the output:
+- DO NOT undermine the baseline investor-tone voice. If a user upvoted a sensational headline, treat it as a SIGNAL ABOUT TOPIC INTEREST, not a request for sensational language.
+- Separate TOPIC preferences (which sectors / companies / themes to lean into or de-emphasise) from EDITORIAL preferences (length, level of detail, focus on numbers vs. context).
+- Be specific and concrete: "prioritise semiconductor supply-chain stories" beats "more tech".
+- Keep it tight: a single short paragraph, 3-5 sentences max, no bullet points, no preamble.`;
+    const prompt = `Yesterday's feedback (${dk}):\n${feedbackText}\n\nCondense into 3-5 actionable preferences for tomorrow's digest reporter:`;
     const note = await digestGen._callModel(model, prompt, system);
     await storage.setQualityNote({ text: note.trim(), generatedAt: new Date().toISOString(), basedOn: dk, feedbackCount: feedback.length });
     console.log('[quality-check] note saved:', note.slice(0, 120));
