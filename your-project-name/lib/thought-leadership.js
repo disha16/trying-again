@@ -152,7 +152,7 @@ async function pickImageForTopic(topic, entry) {
   if (fromEmail) return fromEmail;
   // Deterministic fallback: every card keeps the same picture across refreshes.
   const key = String(entry?.id || entry?.source || topic || 'tl');
-  return ILLUSTRATION_ARCHIVE[_hashToIdx(key)];
+  return require('./undraw').pick(key);
 }
 
 async function summariseOne(entry, model) {
@@ -276,7 +276,7 @@ Rules:
       tldr:           p.tldr || '',
       keyPoints:      Array.isArray(p.key_points) ? p.key_points.slice(0, 3) : [],
       readingMinutes: p.reading_minutes || 1,
-      image:          ILLUSTRATION_ARCHIVE[_hashToIdx(imgKey)],
+      image:          require('./undraw').pick(imgKey),
       isLLMFallback:  true,
     };
   });

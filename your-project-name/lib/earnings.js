@@ -99,7 +99,8 @@ async function fetchEarnings(limit = 5) {
     const dateLabel = m?.[2] || note || null;
 
     if (!title || !url) continue;
-    items.push({ title, url, image, author, dateLabel, source: 'MarketBeat' });
+    const finalImage = image || require('./undraw').pick(title);
+    items.push({ title, url, image: finalImage, author, dateLabel, source: 'MarketBeat' });
   }
 
   console.log(`[earnings] fetched ${items.length} articles from MarketBeat`);

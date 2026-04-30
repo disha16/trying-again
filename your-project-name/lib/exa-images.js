@@ -5,27 +5,21 @@
  *
  * Per latest product call: NO web image lookup (no Exa, no Tavily, no Brave).
  * If a card already has an image from the source newsletter, keep it.
- * Otherwise: assign a deterministic placeholder so every card has *some* image.
+ * Otherwise: assign a deterministic unDraw illustration so every card has
+ * *some* visual.
  *
- * The placeholder uses picsum.photos with a seed derived from the headline,
- * which gives a stable, decent-looking generic image per card across reloads
- * (no API key, no rate limits, no credits). Fully cacheable on the CDN.
+ * unDraw illustrations are open-source SVGs hosted via jsDelivr — fast,
+ * cacheable, no API key, no rate limits, no credits. Fully cacheable on the CDN.
  *
  * File name kept (`exa-images.js`) for back-compat — many call sites still
  * `require('./exa-images')`. Function name `enrichClustersWithImages` is the
  * public entry point used by server.js and topic-clusters.js.
  */
 
+const undraw = require('./undraw');
+
 function placeholderForHeadline(headline) {
-  // Stable hash → seed; identical headlines get identical placeholders.
-  let h = 0;
-  for (let i = 0; i < headline.length; i++) {
-    h = ((h << 5) - h) + headline.charCodeAt(i);
-    h |= 0;
-  }
-  const seed = Math.abs(h);
-  // 800x420 = roughly 16:9; matches our card aspect.
-  return `https://picsum.photos/seed/${seed}/800/420`;
+  return undraw.pick(headline || 'card');
 }
 
 async function enrichClustersWithImages(clusters /* opts ignored */) {
@@ -38,7 +32,7 @@ async function enrichClustersWithImages(clusters /* opts ignored */) {
     placed++;
   }
   if (placed) {
-    console.log(`[card-images] assigned placeholders: ${placed}/${clusters.length}`);
+    console.log(`[card-images] assigned unDraw placeholders: ${placed}/${clusters.length}`);
   }
 }
 

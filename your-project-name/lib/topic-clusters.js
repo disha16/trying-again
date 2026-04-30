@@ -123,7 +123,7 @@ ${webExcerpts ? `WEB EXCERPTS (use only to add missing context — do NOT contra
       description:    (a.description || '').trim().slice(0, 220),
       source:         img?.source    || sourceName((webResults?.[0]?.url) || ''),
       sourceUrl:      img?.sourceUrl || (webResults?.[0]?.url) || '',
-      image:          img?.image     || null,
+      image:          img?.image     || require('./undraw').pick(a.headline || ''),
       internetSource: true,
     };
   }).filter(a => a.headline);
@@ -170,7 +170,7 @@ async function buildTopicClusters(digest, useInternet, model = 'llama-3.3-70b-ve
     return {
       topic,
       summary: newsletterExcerpt.split('\n\n')[0] || '',
-      image:   story.image || (webResults.find(r => isGoodImage(r.image, r.url))?.image) || null,
+      image:   story.image || (webResults.find(r => isGoodImage(r.image, r.url))?.image) || require('./undraw').pick(topic),
       stories: angles,
     };
   }));
