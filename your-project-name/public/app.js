@@ -503,7 +503,7 @@ $('#refreshBtn').addEventListener('click', () => {
 
   // EventSource can't send headers; pass secret as query param
   const _cronSecret = 'newsletter-digest-cron-2026';
-  const es = new EventSource('/api/run-digest');
+  const es = new EventSource('/api/run-digest?force=true');
 
   es.addEventListener('status', e => {
     const { message } = JSON.parse(e.data);

@@ -74,6 +74,17 @@ app.get('/api/debug-storage', async (req, res) => {
   }
 });
 
+// ─── Clear email cache (forces re-fetch of all emails next run) ───────────────
+app.post('/api/clear-email-cache', async (req, res) => {
+  try {
+    await storage.setKey('emailCache', {});
+    res.json({ ok: true, message: 'Email cache cleared' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 app.get('/api/settings', async (req, res) => {
   const s = await storage.getSettings();
   // Don't echo the raw API key back to the client; just signal whether it's set
@@ -539,7 +550,8 @@ async function runDigestSSE(req, res) {
   const _now = new Date();
   const _etHour = (_now.getUTCHours() - 4 + 24) % 24; // UTC-4 (EDT)
   const _todayKey = `${_now.getUTCFullYear()}-${String(_now.getUTCMonth()+1).padStart(2,'0')}-${String(_now.getUTCDate()).padStart(2,'0')}`;
-  if (_etHour >= 15) {
+  const _forceRefresh = req.query.force === 'true' || req.query.force === '1';
+  if (_etHour >= 15 && !_forceRefresh) {
     try {
       const _cached = await supa.getDigest(_todayKey);
       if (_cached && _cached.digest) {
@@ -567,6 +579,7 @@ async function runDigestSSE(req, res) {
     console.log(`[cron/digest] cluster: ${clusterModel}, digest: ${digestModel}, editor: ${editorModel}, custom: ${customSections.map(s=>s.label).join(',') || 'none'}`);
 
     send('status', { message: 'Fetching emails…' });
+    if (_forceRefresh) { await storage.setKey('emailCache', {}); console.log('[cron/digest] force refresh: email cache cleared'); }
     const { entries, cacheHits, cacheMisses } = await gmail.fetchNewsletterHeadlines();
     console.log(`[cron/digest] entries: ${entries.length}`);
     send('status', { message: `${entries.length} newsletters (${cacheHits} cached, ${cacheMisses} new). Clustering…` });
