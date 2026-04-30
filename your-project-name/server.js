@@ -909,6 +909,29 @@ async function runDigestSSE(req, res) {
       } catch (e) {
         console.error('[cron/digest] internet fallback error:', e.message);
       }
+      // After internet-fallback, any items it added with null/bad images need enrichment.
+      try {
+        const { attachImages } = require('./lib/image-fallback');
+        const allCats = ['top_today','tech','us_business','india_business','global_economies','politics','everything_else', ...customSections.map(s => s.id)];
+        const stillMissing = [];
+        for (const cat of allCats) {
+          if (!Array.isArray(digest[cat])) continue;
+          for (const item of digest[cat]) {
+            if (!item.image) stillMissing.push(item);
+          }
+        }
+        if (stillMissing.length) await attachImages(stillMissing, { maxLookups: 30 });
+        // Final undraw fallback for any item that still has no image after Serper Images.
+        const undraw = require('./lib/undraw');
+        for (const cat of allCats) {
+          if (!Array.isArray(digest[cat])) continue;
+          for (const item of digest[cat]) {
+            if (!item.image) item.image = undraw.pick(item.headline || '');
+          }
+        }
+      } catch (e) {
+        console.warn('[cron/digest] post-internet image enrichment failed:', e.message);
+      }
     }
 
     // ── Save core digest immediately so user sees results fast ──────────────
