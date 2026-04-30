@@ -63,11 +63,15 @@ app.get('/api/debug-storage', async (req, res) => {
   try {
     const tokens = await storage.getGmailTokens();
     const settings = await storage.getSettings();
+    const storedKey = settings.anthropicApiKey || '';
+    const envKey = process.env.ANTHROPIC_API_KEY || '';
     res.json({
       gmail_tokens_present: !!(tokens && tokens.access_token),
       gmail_email: tokens ? tokens.email || 'unknown' : null,
       settings_model: settings.clusterModel,
       settings_anthropic_key_set: !!(settings.anthropicApiKey),
+      stored_key_preview: storedKey ? storedKey.slice(0,20) + '...' + storedKey.slice(-6) : 'NOT SET',
+      env_key_preview: envKey ? envKey.slice(0,20) + '...' + envKey.slice(-6) : 'NOT SET',
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

@@ -11,7 +11,13 @@ const path      = require('path');
 const GROQ_MODELS      = ['llama-3.3-70b-versatile', 'llama-3.1-70b-versatile', 'llama-3.1-8b-instant'];
 const DEEPSEEK_MODELS  = ['deepseek-chat', 'deepseek-reasoner'];
 const QWEN_MODELS      = ['qwen-plus', 'qwen-turbo', 'qwen-max'];
-const ANTHROPIC_MODELS = ['claude-sonnet-4-5', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'];
+const ANTHROPIC_MODELS = [
+  'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-5-20250929',
+  'claude-sonnet-4-20250514',
+  'claude-opus-4-20250514',
+  'claude-opus-4-5-20251101',
+];
 const CLI_MODELS       = ['claude-cli'];
 const ALL_MODELS       = [...CLI_MODELS, ...ANTHROPIC_MODELS, ...GROQ_MODELS, ...DEEPSEEK_MODELS, ...QWEN_MODELS];
 
