@@ -19,6 +19,10 @@ const cache = new Map(); // headline → image URL (or null for "tried, found no
 
 const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite/i;
 
+// Google's encrypted thumbnail proxy serves heavily compressed ~200px images.
+// We don't want those — only the original publisher image.
+const GSTATIC_THUMBNAIL = /encrypted-tbn\d*\.gstatic\.com|\.gstatic\.com\/.+\bimages\b/i;
+
 async function fetchWithTimeout(url, init = {}, ms = 4000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), ms);
@@ -26,10 +30,11 @@ async function fetchWithTimeout(url, init = {}, ms = 4000) {
   finally { clearTimeout(t); }
 }
 
-function isUsable(imgUrl) {
+function isUsable(imgUrl, { allowThumbnails = false } = {}) {
   if (!imgUrl) return false;
   if (BAD_IMAGE.test(imgUrl)) return false;
   if (!/^https?:\/\//.test(imgUrl)) return false;
+  if (!allowThumbnails && GSTATIC_THUMBNAIL.test(imgUrl)) return false;
   return true;
 }
 
@@ -45,9 +50,19 @@ async function serperImage(query) {
     if (!r.ok) return null;
     const data  = await r.json();
     const items = data.images || [];
+    // Prefer real publisher images that are large enough to look crisp on a card.
+    // Skip gstatic thumbnails entirely on the first pass.
     for (const it of items) {
-      const url = it.imageUrl || it.thumbnailUrl;
-      if (isUsable(url)) return url;
+      const url = it.imageUrl;
+      const w = Number(it.imageWidth || 0);
+      const h = Number(it.imageHeight || 0);
+      // Require a reasonable size when dimensions are reported (publisher images
+      // usually report dimensions; gstatic-only ones often don't).
+      if (isUsable(url) && (!w || w >= 480) && (!h || h >= 270)) return url;
+    }
+    // Fallback pass: accept smaller publisher images, still skipping gstatic.
+    for (const it of items) {
+      if (isUsable(it.imageUrl)) return it.imageUrl;
     }
     return null;
   } catch { return null; }
