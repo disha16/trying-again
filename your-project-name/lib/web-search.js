@@ -33,6 +33,14 @@ function getExa() {
   return _exa;
 }
 
+// Helper: fetch with a hard timeout — slow providers shouldn't bottleneck the chain.
+async function fetchWithTimeout(url, init = {}, ms = 8000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, { ...init, signal: ctl.signal }); }
+  finally { clearTimeout(t); }
+}
+
 // Treat these as "provider is dead" signals — move on to the next source.
 function isProviderFailure(err) {
   if (!err) return false;
@@ -40,6 +48,7 @@ function isProviderFailure(err) {
   if (status === 401 || status === 402 || status === 403 || status === 429) return true;
   if (status && status >= 500 && status < 600) return true;
   const msg = String(err.message || err).toLowerCase();
+  if (err.name === 'AbortError' || /aborted|timed?\s*out/.test(msg)) return true;
   return /api.?key|unauthori|forbidden|credits?|quota|insufficient|balance|rate.?limit|overload|unavailable|billing|payment|out of|exhaust/.test(msg);
 }
 
@@ -79,7 +88,7 @@ async function searchLangSearch(query, opts = {}) {
     else if (ms <=  31 * 24 * 3600 * 1000) freshness = 'oneMonth';
     else                                   freshness = 'oneYear';
   }
-  const r = await fetch('https://api.langsearch.com/v1/web-search', {
+  const r = await fetchWithTimeout('https://api.langsearch.com/v1/web-search', {
     method:  'POST',
     headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify({
@@ -107,7 +116,7 @@ async function searchLangSearch(query, opts = {}) {
 async function searchTavily(query, opts = {}) {
   const key = process.env.TAVILY_API_KEY;
   if (!key) throw new Error('TAVILY_API_KEY not set');
-  const r = await fetch('https://api.tavily.com/search', {
+  const r = await fetchWithTimeout('https://api.tavily.com/search', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
@@ -151,9 +160,9 @@ async function searchGDELT(query, opts = {}) {
     // Default to last 7 days for a useful recency signal.
     params.set('timespan', '10080min');
   }
-  const r = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params.toString()}`, {
+  const r = await fetchWithTimeout(`https://api.gdeltproject.org/api/v2/doc/doc?${params.toString()}`, {
     headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (newsletter-digest)' },
-  });
+  }, 6000);
   if (!r.ok) { const err = new Error(`GDELT ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
   const text = await r.text();
   let data;
@@ -174,7 +183,7 @@ async function searchSerper(query, opts = {}) {
   const key = process.env.SERPER_API_KEY;
   if (!key) throw new Error('SERPER_API_KEY not set');
   // Use the news endpoint for fresh, news-flavoured SERP results.
-  const r = await fetch('https://google.serper.dev/news', {
+  const r = await fetchWithTimeout('https://google.serper.dev/news', {
     method: 'POST',
     headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
     body: JSON.stringify({ q: query, num: opts.numResults || 10 }),
@@ -203,7 +212,7 @@ async function searchMojeek(query, opts = {}) {
     fmt:     'json',
     t:       String(opts.numResults || 10),
   });
-  const r = await fetch(`https://www.mojeek.com/search?${params.toString()}`, {
+  const r = await fetchWithTimeout(`https://www.mojeek.com/search?${params.toString()}`, {
     headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (newsletter-digest)' },
   });
   if (!r.ok) { const err = new Error(`Mojeek ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
@@ -242,7 +251,7 @@ async function searchSearXNG(query, opts = {}) {
     else                                   bucket = 'year';
     params.set('time_range', bucket);
   }
-  const r = await fetch(`${base}/search?${params.toString()}`, {
+  const r = await fetchWithTimeout(`${base}/search?${params.toString()}`, {
     headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (newsletter-digest)' },
   });
   if (!r.ok) { const err = new Error(`SearXNG ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
@@ -265,7 +274,7 @@ async function searchBrave(query, opts = {}) {
   const key = process.env.BRAVE_API_KEY;
   if (!key) throw new Error('BRAVE_API_KEY not set');
   const url = `https://api.search.brave.com/res/v1/news/search?q=${encodeURIComponent(query)}&count=${opts.numResults || 10}&freshness=pd`;
-  const r = await fetch(url, { headers: { 'X-Subscription-Token': key, 'Accept': 'application/json' } });
+  const r = await fetchWithTimeout(url, { headers: { 'X-Subscription-Token': key, 'Accept': 'application/json' } });
   if (!r.ok) { const err = new Error(`Brave ${r.status}: ${await r.text().catch(() => '')}`); err.status = r.status; throw err; }
   const data = await r.json();
   return ((data.results || [])).map(hit => ({
