@@ -1852,10 +1852,82 @@ function showTrainerStatus(msg, type = 'success') {
   el.textContent = msg;
   el.className = `trainer-status ${type}`;
   el.classList.remove('hidden');
+}/* ── Thought Leadership sources (Settings panel) ────────────────── */
+async function loadTlSources() {
+  const list = document.getElementById('tlSourceList');
+  if (!list) return;
+  try {
+    const all = await fetch('/sources').then(r => r.json());
+    const tl  = (Array.isArray(all) ? all : []).filter(s => s.kind === 'thought_leadership');
+    if (!tl.length) {
+      list.innerHTML = '<li class="meta" style="padding:10px 4px;color:var(--muted)">No Thought Leadership sources yet. Add one below.</li>';
+      return;
+    }
+    list.innerHTML = tl.map(s => `
+      <li class="source-item" data-id="${s.id}">
+        <div class="source-info">
+          <span class="source-name ${s.enabled ? '' : 'disabled'}">${esc(s.name)}</span>
+          <span class="source-email">${s.email ? esc(s.email) : '<span style="color:#f59e0b">⚠ No sender email</span>'}</span>
+          ${s.url ? `<a class="source-url" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>` : ''}
+        </div>
+        <div class="toggle-wrap">
+          <span class="toggle-label">${s.enabled ? 'On' : 'Off'}</span>
+          <label class="toggle">
+            <input type="checkbox" ${s.enabled ? 'checked' : ''} data-tl-toggle="${s.id}" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <button class="btn-danger" data-tl-delete="${s.id}">Remove</button>
+      </li>
+    `).join('');
+    list.querySelectorAll('[data-tl-toggle]').forEach(el => {
+      el.addEventListener('change', async (e) => {
+        const id = el.getAttribute('data-tl-toggle');
+        await fetch(`/sources/${id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: e.target.checked }),
+        });
+        loadTlSources(); loadSources();
+      });
+    });
+    list.querySelectorAll('[data-tl-delete]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remove this Thought Leadership source?')) return;
+        const id = btn.getAttribute('data-tl-delete');
+        await fetch(`/sources/${id}`, { method: 'DELETE' });
+        loadTlSources(); loadSources();
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<li class="meta">Could not load TL sources: ${esc(e.message)}</li>`;
+  }
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('addTlSrcBtn')?.addEventListener('click', async () => {
+    const name  = document.getElementById('newTlSrcName')?.value.trim();
+    const email = document.getElementById('newTlSrcEmail')?.value.trim();
+    const url   = document.getElementById('newTlSrcUrl')?.value.trim();
+    if (!name) { document.getElementById('newTlSrcName')?.focus(); return; }
+    await fetch('/sources', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, url, kind: 'thought_leadership' }),
+    });
+    document.getElementById('newTlSrcName').value  = '';
+    document.getElementById('newTlSrcEmail').value = '';
+    document.getElementById('newTlSrcUrl').value   = '';
+    loadTlSources();
+    loadSources();
+  });
+  document.querySelectorAll('.tab[data-tab="settings"]').forEach(t => {
+    t.addEventListener('click', () => { setTimeout(loadTlSources, 50); });
+  });
+  // Also load on first paint if Settings is the initial tab
+  setTimeout(loadTlSources, 150);
+});
 
-/* ── Chart-of-day sources (Settings panel) ──────────────────────────── */
+
+/* ── Chart-of-day sources (Settings panel) ────────────────────── */
 async function loadChartSources() {
   const list = $('#chartSourceList');
   if (!list) return;

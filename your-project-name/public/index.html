@@ -392,6 +392,18 @@
       </div>
     </div>
     <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <div class="model-group-label" style="margin-bottom:12px">Thought Leadership — sources</div>
+      <p class="meta" style="margin:0 0 10px;">Substacks and long-form newsletters we turn into 1-minute TL;DR cards. Add a sender email (what you see in the forwarded email's From: line) and we'll pick these up in the next 3pm run.</p>
+      <ul id="tlSourceList" class="source-list" style="margin-bottom:10px"></ul>
+      <div class="add-source-row" style="margin-top:6px">
+        <input type="text"  id="newTlSrcName"  placeholder="Label, e.g. Stratechery" />
+        <input type="email" id="newTlSrcEmail" placeholder="Sender email, e.g. ben@stratechery.com" />
+        <input type="url"   id="newTlSrcUrl"   placeholder="Website (optional)" />
+        <button id="addTlSrcBtn" class="btn-primary">Add</button>
+      </div>
+    </div>
+
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
       <div class="model-group-label" style="margin-bottom:12px">Chart of the Day — sources</div>
       <p class="meta" style="margin:0 0 10px;">Pages and Twitter/X accounts we scrape at 3pm to build the chart-of-day carousel. Up to 5 charts total, round-robined across sources.</p>
       <ul id="chartSourceList" class="source-list" style="margin-bottom:10px"></ul>
