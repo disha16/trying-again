@@ -69,22 +69,27 @@ function httpsGetText(url, { headers = {}, timeoutMs = 12000, maxRedirects = 5 }
   });
 }
 
-// Nitter mirrors used to scrape Twitter/X timelines as RSS. We try them in order;
-// first one that returns a 200 with parseable RSS wins. Add more as they prove
-// reliable; the default of nitter.net has been the most stable mirror.
-const NITTER_MIRRORS = [
-  'https://nitter.net',
+// Curated list of active chart-bearing publishers (RSS only). Each one is
+// verified to (a) be reachable from Vercel, (b) post charts in their hero/inline
+// imagery, and (c) have published within the last 30 days at probe time.
+//
+// chartFirst=true: the post's hero image IS the chart (dedicated chart feeds).
+// chartFirst=false: the post is general news; we must scan the article body for
+// chart-like imagery before promoting it (drops misleading hero photos).
+//
+// Recency: at fetch time we filter to posts from the last RECENCY_DAYS days and
+// sort by recency, so even with a long source list only fresh content surfaces.
+const DEFAULT_SOURCES = [
+  { name: 'Charlie Bilello',         kind: 'rss', url: 'https://bilello.blog/feed',                       chartFirst: true  },
+  { name: 'Klement on Investing',    kind: 'rss', url: 'https://klementoninvesting.substack.com/feed',    chartFirst: true  },
+  { name: 'Joey Politano (Apricitas)', kind: 'rss', url: 'https://www.apricitas.io/feed',                 chartFirst: true  },
+  { name: 'Apollo Academy',          kind: 'rss', url: 'https://www.apolloacademy.com/feed/',             chartFirst: true  },
+  { name: 'NYT Business',            kind: 'rss', url: 'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml', chartFirst: false },
 ];
 
-const DEFAULT_SOURCES = [
-  // chartFirst=true means the source's hero image IS the chart (dedicated chart feeds / chart-y Twitter accounts).
-  // chartFirst=false means we must verify by scraping the article body for an actual
-  // chart-like image; if none, the entry is dropped.
-  // For kind='twitter' the `url` field is the X/Twitter handle (with or without @, or a full twitter.com/x.com profile URL).
-  { name: 'Charlie Bilello',   kind: 'twitter', url: 'https://twitter.com/charliebilello', chartFirst: true },
-  { name: 'Apollo Academy',    kind: 'rss',     url: 'https://www.apolloacademy.com/feed/', chartFirst: true },
-  { name: 'NYT Business',      kind: 'rss',     url: 'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml', chartFirst: false },
-];
+// Only show charts published within this many days. Anything older is filtered
+// out at fetch time so a stale source can't anchor the carousel with old data.
+const RECENCY_DAYS = 3;
 
 async function getChartSources() {
   try {
@@ -170,36 +175,55 @@ function stripTags(s) {
   return decodeXml(s).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// URLs that look like images but are decorative noise (emoji, sprites,
+// tracking pixels, share/social icons, WP smileys, etc.). We skip these so a
+// post titled "The Week in Charts 📊" doesn't surface the bar-chart EMOJI as the
+// hero image instead of an actual chart from the post body.
+const NON_CHART_IMG_RE = /(s\.w\.org\/images\/core\/emoji|\/emoji\/|\/wp-includes\/images\/smilies|\/feedburner|stats\.wp\.com|fls\.doubleclick|tracking|pixel|favicon|sprite|avatar|gravatar|share-?(?:icon|button)|social-?icon|ad-?banner)/i;
+
+function _isUsableImage(url) {
+  return !!url && !NON_CHART_IMG_RE.test(url);
+}
+
 function extractImage(itemXml) {
   // 1. <enclosure url="…" type="image/…">
   let m = itemXml.match(/<enclosure[^>]+url=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["'][^>]*>/i);
-  if (m) return m[1];
+  if (m && _isUsableImage(m[1])) return m[1];
 
   // 2. <media:content url="…" medium="image" />
   m = itemXml.match(/<media:content[^>]+url=["']([^"']+)["']/i);
-  if (m && /\.(jpg|jpeg|png|webp|gif)/i.test(m[1])) return m[1];
+  if (m && /\.(jpg|jpeg|png|webp|gif)/i.test(m[1]) && _isUsableImage(m[1])) return m[1];
 
   // 3. <media:thumbnail url="…" />
   m = itemXml.match(/<media:thumbnail[^>]+url=["']([^"']+)["']/i);
-  if (m) return m[1];
+  if (m && _isUsableImage(m[1])) return m[1];
 
-  // 4. <img src="…"> inside <content:encoded> or <description>
+  // 4. <img src="…"> inside <content:encoded> or <description>: take the
+  //    first usable one (skip emoji, smilies, tracking pixels). Bilello's
+  //    feed in particular has a bar-chart emoji in title that gets picked
+  //    by a naive 'first <img>' approach — we want the actual chart from
+  //    further down in the post.
   const body = (itemXml.match(/<content:encoded>([\s\S]*?)<\/content:encoded>/i)?.[1])
             || (itemXml.match(/<description>([\s\S]*?)<\/description>/i)?.[1])
             || '';
-  m = body.match(/<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/i);
-  if (m) return decodeXml(m[1]);
+  const imgRe = /<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/gi;
+  let im;
+  while ((im = imgRe.exec(body)) !== null) {
+    const candidate = decodeXml(im[1]);
+    if (_isUsableImage(candidate)) return candidate;
+  }
 
   return null;
 }
 
 async function scrapeRss(source) {
-  const resp = await fetch(source.url, {
-    headers: { 'User-Agent': UA, Accept: 'application/rss+xml, application/xml, text/xml, */*' },
-    signal:  AbortSignal.timeout(25000),
+  // Use httpsGetText, not built-in fetch — several feeds (bilello.blog/feed,
+  // some Substacks) respond with redirects + gzip that undici fetch handles
+  // unreliably on Vercel. httpsGetText follows redirects and decompresses.
+  const xml = await httpsGetText(source.url, {
+    headers: { Accept: 'application/rss+xml, application/xml, text/xml, */*' },
+    timeoutMs: 15000,
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const xml = await resp.text();
 
   const chartFirst = source.chartFirst !== false; // default true for back-compat
 
@@ -251,7 +275,11 @@ async function scrapeRss(source) {
   return charts;
 }
 
-// ── Twitter/X scraping via Nitter ───────────────────────────────────────────────────────
+// ── (legacy) Twitter/X scraping via Nitter ─────────────────────────────────────
+// Kept for backwards compatibility only — Vercel datacenter IPs are blocked by
+// every working Nitter mirror in 2026, so this path consistently times out or
+// returns 403/captcha. New deployments should use kind:'rss' sources.
+const NITTER_MIRRORS = ['https://nitter.net'];
 
 /** Extract the @handle from any of: "@handle", "handle", "https://twitter.com/handle", "https://x.com/handle/...". */
 function extractTwitterHandle(input) {
@@ -396,23 +424,57 @@ async function scrapeHtmlPage(source) {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Pull the most-recent qualifying chart from each configured source, then keep
+ * only those posted within the last RECENCY_DAYS, sorted newest-first. This
+ * lets us stack a long source list and surface only what's actually fresh.
+ */
 async function fetchCharts() {
   const sources = await getChartSources();
-  const out = [];
-  for (const s of sources) {
-    if (s.enabled === false) continue;
+
+  // Fan out across sources in parallel — each is independent and we don't want
+  // a slow source to delay the others by serializing the whole list.
+  const results = await Promise.all(sources.map(async s => {
+    if (s.enabled === false) return null;
     try {
       const kind = s.kind || 'rss';
       let charts;
       if (kind === 'twitter')      charts = await scrapeTwitter(s);
       else if (kind === 'html')    charts = await scrapeHtmlPage(s);
       else                          charts = await scrapeRss(s);
-      if (charts && charts.length) out.push(charts[0]);
+      return charts && charts[0] ? charts[0] : null;
     } catch (e) {
       console.warn(`[chart] ${s.name} failed: ${e.message}`);
+      return null;
     }
+  }));
+
+  const cutoffMs = Date.now() - RECENCY_DAYS * 24 * 60 * 60 * 1000;
+  const fresh    = [];
+  const stale    = [];
+  for (const c of results) {
+    if (!c) continue;
+    const t = c.postedAt ? Date.parse(c.postedAt) : NaN;
+    if (!isNaN(t) && t >= cutoffMs)      fresh.push({ ...c, _ts: t });
+    else if (!isNaN(t))                  stale.push({ ...c, _ts: t });
+    else                                  stale.push({ ...c, _ts: 0 }); // unknown date
   }
-  return out;
+
+  // Newest-first within fresh window. If we have any fresh items at all, only
+  // ship those — stale entries are silently dropped to keep the carousel current.
+  fresh.sort((a, b) => b._ts - a._ts);
+  if (fresh.length) {
+    return fresh.map(({ _ts, ...rest }) => rest);
+  }
+
+  // No fresh items: fall back to the single most-recent stale chart so the
+  // section never goes empty when sources are quiet for a few days.
+  stale.sort((a, b) => b._ts - a._ts);
+  if (stale.length) {
+    const { _ts, ...rest } = stale[0];
+    return [rest];
+  }
+  return [];
 }
 
 async function getCharts({ dateKey, force = false } = {}) {
