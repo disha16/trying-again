@@ -267,22 +267,43 @@ async function buildAnglesForTopStories(stories, useInternet, model) {
     };
   }).filter(c => c.stories && c.stories.length > 0);
 
-  // PRIMARY image upgrade: scrape OG images for the cluster covers AND every
-  // angle story. Runs in parallel; capped concurrency. Replaces undraw
+  // PRIMARY image upgrade: per-item cascade OG → Serper Images → (keep undraw).
+  // Runs in parallel for covers AND every angle story. Replaces undraw
   // fallbacks when a real publisher image is found.
   try {
-    const { attachOgImages } = require('./og-image');
-    const allTargets = [
-      ...topic_clusters,                       // covers (sourceUrl from parent story)
-      ...topic_clusters.flatMap(c => c.stories), // angle stories (sourceUrl per angle)
-    ];
+    const { attachOgImages, fetchOgImage } = require('./og-image');
+    const { findImage } = require('./image-fallback');
+
     // Attach a sourceUrl to each cluster from its parent story so OG can fetch it
     topic_clusters.forEach((c, idx) => {
       if (!c.sourceUrl) c.sourceUrl = top[idx].sourceUrl || top[idx].url || '';
     });
+
+    const allTargets = [
+      ...topic_clusters,
+      ...topic_clusters.flatMap(c => c.stories),
+    ];
+
+    // Pass 1: OG-image scrape for everything with a sourceUrl.
     await attachOgImages(allTargets, { concurrency: 10 });
+
+    // Pass 2: For anything still on undraw / missing, try Serper Images.
+    const stillNeed = allTargets.filter(it => {
+      const im = it.image || '';
+      return !im || /cdn\.jsdelivr\.net\/gh\/balazser\/undraw/i.test(im) || BAD_IMAGE.test(im);
+    });
+    const SERPER_CAP = 25;
+    const slice = stillNeed.slice(0, SERPER_CAP);
+    await Promise.all(slice.map(async it => {
+      const headline = it.title || it.topic || it.headline || '';
+      if (!headline) return;
+      try {
+        const img = await findImage(headline);
+        if (img) it.image = img;
+      } catch { /* ignore */ }
+    }));
   } catch (e) {
-    console.warn('[angles] og-image attach failed:', e.message);
+    console.warn('[angles] og/serper image attach failed:', e.message);
   }
 
   console.log(`[angles] produced ${topic_clusters.length} deep-dive clusters with ${finalAngles.reduce((n, a) => n + a.length, 0)} total angles`);

@@ -25,8 +25,6 @@ function _isUsable(u) {
   if (!u || typeof u !== 'string') return false;
   if (!/^https?:\/\//i.test(u)) return false;
   if (BAD_IMAGE.test(u)) return false;
-  // Reject tiny obvious thumbnails by URL hint
-  if (/[?&](w|width)=([0-9]{1,2})\b/i.test(u)) return false;
   return true;
 }
 
@@ -34,7 +32,7 @@ function _abs(href, base) {
   try { return new URL(href, base).toString(); } catch { return null; }
 }
 
-async function _fetch(url, ms = 4500) {
+async function _fetch(url, ms = 7000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), ms);
   try {
@@ -42,8 +40,9 @@ async function _fetch(url, ms = 4500) {
       signal: ctl.signal,
       redirect: 'follow',
       headers: {
-        // Pretend to be a real desktop browser — some publishers gate OG tags behind UA checks
-        'User-Agent':       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        // Pose as a Facebook-like crawler — most publishers serve full OG tags to social bots
+        // even when they paywall regular browsers.
+        'User-Agent':       'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php) Mozilla/5.0',
         'Accept':           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language':  'en-US,en;q=0.9',
       },
@@ -128,14 +127,40 @@ function _extractFromHtml(html, baseUrl) {
 
 /**
  * Fetch a single article URL and return its OG image, or null if nothing useable found.
+ * One retry with a regular browser UA in case the social-crawler UA was blocked.
  */
 async function fetchOgImage(articleUrl) {
   if (!articleUrl) return null;
   if (cache.has(articleUrl)) return cache.get(articleUrl);
-  const html  = await _fetch(articleUrl);
-  const image = _extractFromHtml(html, articleUrl);
+  let html  = await _fetch(articleUrl);
+  let image = _extractFromHtml(html, articleUrl);
+  if (!image) {
+    // Retry once with a regular browser UA — some sites 403 the FB crawler
+    html  = await _fetchAsBrowser(articleUrl);
+    image = _extractFromHtml(html, articleUrl);
+  }
   cache.set(articleUrl, image || null);
   return image;
+}
+
+async function _fetchAsBrowser(url, ms = 6000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, {
+      signal: ctl.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent':       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        'Accept':           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language':  'en-US,en;q=0.9',
+      },
+    });
+    if (!r.ok) return null;
+    const txt = await r.text();
+    return txt.length > 250_000 ? txt.slice(0, 250_000) : txt;
+  } catch { return null; }
+  finally { clearTimeout(t); }
 }
 
 /**
