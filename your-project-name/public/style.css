@@ -1097,8 +1097,9 @@ code {
    layout, action buttons and feedback buttons are pixel-identical to
    the Top-10 deck. We only override the absolute-stacking that the Top-10
    deck uses internally (since TL doesn't swipe through a stack). */
-.tl-deck { display: flex; flex-direction: column; gap: 18px; }
-.tl-deck .deck-card { position: relative; top: auto; left: auto; right: auto; transform: none; opacity: 1; }
+/* TL deck now uses the same absolute-stacked .deck-stack as Top-10.
+   No flex/vertical-list overrides here — cards stack on top of each other
+   and advance one at a time via the arrow button. */
 /* Slightly extra top padding so the headline never crowds the heart /
    heart-broken feedback icons sitting in the top-right corner. */
 .tl-deck .deck-card-inner { padding-top: 36px; }
