@@ -12,7 +12,7 @@ const CHART_DOMAINS = [
   'tradingeconomics.com', 'macrotrends.net',
 ];
 
-const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|promo|newsletter|header|footer|icon|avatar|placeholder|pixel|tracking|beacon/i;
+const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|promo|newsletter|header|footer|icon|avatar|placeholder|pixel|tracking|beacon|encrypted-tbn|gstatic\.com/i;
 
 function isGoodImage(imageUrl, sourceUrl) {
   if (!imageUrl) return false;

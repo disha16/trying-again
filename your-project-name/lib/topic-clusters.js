@@ -20,7 +20,7 @@
 const { _callModel } = require('./digest-generator');
 const { search, hasRealSearchProvider } = require('./web-search');
 
-const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon/i;
+const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|encrypted-tbn|gstatic\.com/i;
 const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|einpresswire|prlog|food|recipe|cook|lifestyle|wellness|fitness/i;
 
 function isGoodImage(imageUrl, sourceUrl) {

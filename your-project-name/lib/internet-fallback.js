@@ -59,7 +59,7 @@ const CATEGORY_QUERIES = {
 
 const MIN_ITEMS = 10;
 
-const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|encrypted-tbn|gstatic\.com\/images\?q=tbn/i;
+const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|encrypted-tbn|gstatic\.com/i;
 // PR wire services only — not government/official sources like PIB
 const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|einpresswire|prlog|send2press|openpr|food|recipe|cook|lifestyle|wellness|fitness/i;
 

@@ -1522,3 +1522,33 @@ html[data-theme="dark"] .nav-dark { color: var(--accent-deep); }
   font-style: italic;
   opacity: 0.7;
 }
+
+
+/* ── Loading skeletons ────────────────────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.skeleton-line, .skeleton-block {
+  background: linear-gradient(90deg, #eee 0%, #f5f5f5 50%, #eee 100%);
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.4s linear infinite;
+  border-radius: 4px;
+  display: block;
+}
+.skeleton-line { height: 12px; margin: 8px 0; }
+.skeleton-block { width: 100%; aspect-ratio: 16/9; border-radius: 8px; }
+
+/* TL skeleton card mirrors deck-card sizing */
+.tl-skeleton .deck-card-inner { min-height: 220px; }
+.tl-skeleton .deck-body       { padding-top: 12px; }
+
+/* Earnings skeleton row */
+.earn-skeleton { pointer-events: none; opacity: 0.85; }
+.earn-skeleton .earn-thumb { width: 120px; height: 80px; flex: 0 0 auto; }
+.earn-skeleton .earn-body  { flex: 1 1 auto; padding: 4px 12px; }
+
+/* Deep Dives skeleton row */
+.tc-skeleton { opacity: 0.85; pointer-events: none; }
+.tc-skeleton .tc-header { padding: 10px 14px; }
+.tc-skeleton .skeleton-line { display: inline-block; }

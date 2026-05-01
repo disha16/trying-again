@@ -18,6 +18,17 @@
 
 function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '').trim(); }
 
+// Reject low-quality image URLs (Google thumbnail proxy, branding chrome, trackers).
+// Mirrors the regex in image-fallback.js / internet-fallback.js so the whole
+// pipeline applies the same filter.
+const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite|encrypted-tbn|gstatic\.com/i;
+function _filterImage(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (!/^https?:\/\//.test(url)) return null;
+  if (BAD_IMAGE.test(url)) return null;
+  return url;
+}
+
 function dropReadSources(clusters, sourceReadState) {
   if (!Array.isArray(clusters) || !clusters.length) return clusters || [];
   if (!sourceReadState || typeof sourceReadState !== 'object') return clusters;
@@ -123,7 +134,7 @@ async function topUpFromWeb(clusters, { target = 30, model = 'qwen-plus' } = {})
         headline:        title.slice(0, 120),
         sources:         [sourceName],
         keywords:        keywords,
-        image:           r.image || null,
+        image:           _filterImage(r.image),
         sourceUrl:       r.url || '',
         snippet:         (r.text || r.snippet || '').slice(0, 400),
         internetSource:  true,

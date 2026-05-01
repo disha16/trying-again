@@ -24,7 +24,7 @@ const { _callModel } = require('./digest-generator');
 const { search, hasRealSearchProvider } = require('./web-search');
 
 const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|einpresswire|prlog/i;
-const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite/i;
+const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite|encrypted-tbn|gstatic\.com/i;
 
 function isGoodImage(imageUrl, sourceUrl) {
   if (!imageUrl) return false;
@@ -260,10 +260,30 @@ async function buildAnglesForTopStories(stories, useInternet, model) {
     return {
       topic:   s.headline,
       summary: contextByIndex[i].newsletterExcerpt.split('\n\n')[0] || '',
-      image:   s.image || (contextByIndex[i].webResults.find(r => isGoodImage(r.image, r.url))?.image) || require('./undraw').pick(s.headline),
+      image:   (s.image && !BAD_IMAGE.test(s.image) ? s.image : null)
+               || (contextByIndex[i].webResults.find(r => isGoodImage(r.image, r.url))?.image)
+               || require('./undraw').pick(s.headline),
       stories: angles,
     };
   }).filter(c => c.stories && c.stories.length > 0);
+
+  // PRIMARY image upgrade: scrape OG images for the cluster covers AND every
+  // angle story. Runs in parallel; capped concurrency. Replaces undraw
+  // fallbacks when a real publisher image is found.
+  try {
+    const { attachOgImages } = require('./og-image');
+    const allTargets = [
+      ...topic_clusters,                       // covers (sourceUrl from parent story)
+      ...topic_clusters.flatMap(c => c.stories), // angle stories (sourceUrl per angle)
+    ];
+    // Attach a sourceUrl to each cluster from its parent story so OG can fetch it
+    topic_clusters.forEach((c, idx) => {
+      if (!c.sourceUrl) c.sourceUrl = top[idx].sourceUrl || top[idx].url || '';
+    });
+    await attachOgImages(allTargets, { concurrency: 10 });
+  } catch (e) {
+    console.warn('[angles] og-image attach failed:', e.message);
+  }
 
   console.log(`[angles] produced ${topic_clusters.length} deep-dive clusters with ${finalAngles.reduce((n, a) => n + a.length, 0)} total angles`);
   return { topic_clusters };

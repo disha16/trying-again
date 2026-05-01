@@ -425,22 +425,42 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
   const allCats = [...defaultCats, ...customSections.map(s => s.id)];
   const undraw = require('./undraw');
 
+  // BAD_IMAGE filter mirrors og-image / image-fallback so the entire pipeline
+  // treats the same set of URLs (gstatic thumbnails, banners, trackers) as
+  // "missing".
+  const BAD_IMAGE = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite|encrypted-tbn|gstatic\.com/i;
+
   // First pass: copy through cluster-attached images / keywords by headline match.
-  const stillMissing = [];
+  // We REJECT cluster images that match BAD_IMAGE so we re-derive them below.
+  const allItems = [];
   for (const cat of allCats) {
     if (!Array.isArray(digest[cat])) continue;
     for (const item of digest[cat]) {
       const match = headlineMap[item.headline?.toLowerCase().trim()];
       if (match) {
-        if (!item.image    && match.image)    item.image    = match.image;
+        if (!item.image    && match.image && !BAD_IMAGE.test(match.image)) item.image    = match.image;
         if (!item.keywords && match.keywords) item.keywords = match.keywords;
       }
-      if (!item.image) stillMissing.push(item);
+      // If item already has an image but it's a known-bad URL, drop it so it
+      // gets re-resolved by OG / Serper below.
+      if (item.image && BAD_IMAGE.test(item.image)) item.image = null;
+      allItems.push(item);
     }
   }
 
-  // Second pass: for items still without an image, try Serper Images. This
-  // gives us real photos when Tavily/RSS/Exa didn't return one. Capped at 30
+  // PRIMARY: scrape <meta property="og:image"> from each article's sourceUrl.
+  // This gives us the publisher's own hero image at full resolution. Bounded
+  // concurrency=12; only runs on items lacking a usable image.
+  try {
+    const { attachOgImages } = require('./og-image');
+    await attachOgImages(allItems, { concurrency: 12 });
+  } catch (e) {
+    console.warn('[digest] og-image scrape failed:', e.message);
+  }
+
+  const stillMissing = allItems.filter(it => !it.image || BAD_IMAGE.test(it.image));
+
+  // SECONDARY: Serper Images for anything OG didn't resolve. Capped at 30
   // lookups per digest run to keep Serper quota usage predictable.
   if (stillMissing.length) {
     try {
@@ -451,11 +471,11 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
     }
   }
 
-  // Final fallback: undraw illustration for any item that *still* has no image.
+  // FINAL: undraw illustration for any item that *still* has no image.
   for (const cat of allCats) {
     if (!Array.isArray(digest[cat])) continue;
     for (const item of digest[cat]) {
-      if (!item.image) item.image = undraw.pick(item.headline || '');
+      if (!item.image || BAD_IMAGE.test(item.image)) item.image = undraw.pick(item.headline || '');
     }
   }
 

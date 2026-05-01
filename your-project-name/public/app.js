@@ -266,9 +266,13 @@ function renderCategory(cat) {
   if (cat === 'us_business') {
     renderEarningsWatch(digestData?.earnings || []);
   } else {
-    renderEarningsWatch([]); // hide on other tabs
+    // Hide on other tabs (avoids showing stale skeletons when not on us_business)
+    $('#earningsWatch').classList.add('hidden');
   }
   if (cat === 'top_today') {
+    // On top_today, render every secondary section IMMEDIATELY (with skeletons
+    // when content is not yet available) so the user sees the full page shape
+    // on every reload. Content fills in as it arrives.
     renderTopicClusters(digestData?.topic_clusters || []);
     loadChartsOfDay();
     renderThoughtLeadership(digestData?.thought_leadership || []);
@@ -285,15 +289,57 @@ function renderCategory(cat) {
 function _stripTrailingPeriod(s) {
   return String(s || '').replace(/\s*\.\s*$/, '').trim();
 }
+let __tlCards = [];
+let __tlIndex = 0;
 function renderThoughtLeadership(cards) {
   const block = $('#thoughtLeadership');
   const deck  = $('#tlDeck');
   if (!block || !deck) return;
-  if (!cards || !cards.length) { block.classList.add('hidden'); return; }
+  // Always show the section frame on the top_today tab, even before TL
+  // content is ready (it streams in after the initial digest payload).
   block.classList.remove('hidden');
+  if (!cards || !cards.length) {
+    deck.innerHTML = `
+      <div class="deck-stack tl-stack tl-skeleton">
+        <div class="deck-card deck-active" style="--offset:0">
+          <div class="deck-card-inner">
+            <div class="deck-image skeleton-block"></div>
+            <div class="deck-body">
+              <div class="skeleton-line" style="width:80%;height:18px"></div>
+              <div class="skeleton-line" style="width:95%"></div>
+              <div class="skeleton-line" style="width:70%"></div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+  __tlCards = cards;
+  if (__tlIndex >= __tlCards.length) __tlIndex = 0;
+  _renderTLDeck();
+}
+
+function _advanceTL() {
+  __tlIndex = Math.min(__tlIndex + 1, __tlCards.length);
+  _renderTLDeck();
+}
+
+function _renderTLDeck() {
+  const deck = $('#tlDeck');
+  if (!deck) return;
   const FEEDBACK_SVG_UP   = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.63-10.1-9.25C.17 8.82 1.9 5.5 5.1 5.5c1.94 0 3.48 1.04 4.4 2.55h1c.92-1.51 2.46-2.55 4.4-2.55 3.2 0 4.93 3.32 3.2 6.25C19.5 16.37 12 21 12 21z"/></svg>';
   const FEEDBACK_SVG_DOWN = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.2 19.72C5.1 15.14 1.5 11.94 1.5 8.05 1.5 5.11 3.82 3 6.7 3c1.67 0 3.28.78 4.3 2.02L12 6l1-.98C14.02 3.78 15.63 3 17.3 3c2.88 0 5.2 2.11 5.2 5.05 0 .57-.08 1.11-.22 1.63l-3.05-1.52-1.23 2.46 3.01 1.5c-.55.71-1.22 1.45-2 2.23-.35-.13-.72-.22-1.11-.22a3 3 0 0 0-2.9 2.27l-2.32-1.16 1.23-2.46-4.9-2.44-1.23 2.45 2.44 1.22-2.45 1.22 1.24 2.46 2.73-1.37a3 3 0 0 0 3.07 2.28c.25 0 .49-.03.72-.09L12 21.35z"/></svg>';
-  deck.innerHTML = cards.map((c, idx) => {
+
+  // Done state: all cards advanced through.
+  if (__tlIndex >= __tlCards.length) {
+    deck.innerHTML = `<div class="deck-stack tl-stack"><div class="deck-done"><p>You've read all ${__tlCards.length} thought-leadership pieces.</p><button class="deck-btn" id="tlReset">Restart</button></div></div>`;
+    deck.querySelector('#tlReset')?.addEventListener('click', () => { __tlIndex = 0; _renderTLDeck(); });
+    return;
+  }
+
+  // Build stack: current + up to 2 behind, mirroring Top-10 .deck-stack pattern.
+  const stackHtml = __tlCards.slice(__tlIndex, __tlIndex + 3).map((c, offset) => {
+    const isActive = offset === 0;
     const srcName = prettifySource(c.source || 'Thought Leadership');
     const url     = c.url || c.sourceUrl || sourceMap[c.source] || '';
     const badge   = url
@@ -303,10 +349,8 @@ function renderThoughtLeadership(cards) {
     const points  = Array.isArray(c.keyPoints) && c.keyPoints.length
       ? `<ul class="deck-points">${c.keyPoints.map(p => `<li>${esc(_stripTrailingPeriod(p))}</li>`).join('')}</ul>`
       : '';
-    // Same .deck-card markup as Top-10 (no .tl-deck-card override class so the
-    // CSS that scoped TL to a narrower grid no longer applies).
     return `
-      <div class="deck-card deck-active" style="--offset:0" data-tl-idx="${idx}">
+      <div class="deck-card ${isActive ? 'deck-active' : ''}" style="--offset:${offset}">
         <div class="deck-card-inner">
           <div class="deck-feedback-top">
             <button class="deck-feedback-mini deck-up"   aria-label="Good story" title="Good story" data-vote="up">${FEEDBACK_SVG_UP}</button>
@@ -314,6 +358,7 @@ function renderThoughtLeadership(cards) {
           </div>
           ${c.image ? `<img class="deck-image" src="${esc(c.image)}" alt="" loading="lazy" onerror="__imgFallback(this, this.alt || '')" />` : ''}
           <div class="deck-body">
+            <span class="deck-counter">${__tlIndex + 1} / ${__tlCards.length}</span>
             <div class="deck-headline">${esc(c.title || '')}</div>
             ${body ? `<div class="deck-desc">${esc(body)}</div>` : ''}
             ${points}
@@ -322,36 +367,70 @@ function renderThoughtLeadership(cards) {
               <div class="deck-actions">
                 <button class="deck-btn tl-chat"     title="Ask about this story">💬</button>
                 <button class="deck-btn tl-notebook" title="Add to notebook">📓</button>
-                ${url ? `<a class="deck-btn" href="${esc(url)}" target="_blank" rel="noopener" title="Open">→</a>` : ''}
+                <button class="deck-btn tl-skip"     title="Next">→</button>
               </div>
             </div>
           </div>
         </div>
       </div>`;
-  }).join('');
-  // Wire chat + notebook on each card (mirrors deck-card behaviour).
-  deck.querySelectorAll('.deck-card').forEach(card => {
-    const idx = Number(card.dataset.tlIdx);
-    const c   = cards[idx] || {};
-    card.querySelector('.tl-chat')?.addEventListener('click', () => {
-      try { localStorage.setItem('chatPreload', `Thought Leadership: "${c.title || ''}". Source: ${c.url || c.sourceUrl || ''}`); } catch {}
-      $('[data-tab="chat"]')?.click();
+  }).reverse().join('');
+
+  deck.innerHTML = `<div class="deck-stack tl-stack">${stackHtml}</div>`;
+
+  // Size stack to active card height (same trick as Top-10).
+  const stack      = deck.querySelector('.tl-stack');
+  const activeCard = deck.querySelector('.deck-active');
+  if (stack && activeCard) {
+    const setHeight = () => { stack.style.height = activeCard.offsetHeight + 'px'; };
+    requestAnimationFrame(setHeight);
+    activeCard.querySelectorAll('img').forEach(img => {
+      if (!img.complete) img.addEventListener('load', setHeight, { once: true });
+      img.addEventListener('error', setHeight, { once: true });
     });
-    card.querySelector('.tl-notebook')?.addEventListener('click', async () => {
-      try {
-        await fetch('/api/notes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title:        c.title || 'Thought Leadership',
-            description:  c.tldr || c.description || '',
-            source_url:   c.url || c.sourceUrl || '',
-            image_url:    c.image || null,
-            kind:         'thought_leadership',
-          }),
-        });
-        showSaveStatus?.('Saved to notebook');
-      } catch (err) { console.warn('TL → note failed', err); }
+    if ('ResizeObserver' in window) {
+      const ro = new ResizeObserver(setHeight);
+      ro.observe(activeCard);
+      stack._cleanup?.();
+      stack._cleanup = () => ro.disconnect();
+    }
+  }
+
+  // Wire active card's actions (chat, notebook, skip, feedback).
+  const card = __tlCards[__tlIndex];
+  if (!card || !activeCard) return;
+  activeCard.querySelector('.tl-skip')?.addEventListener('click', _advanceTL);
+  activeCard.querySelector('.tl-chat')?.addEventListener('click', () => {
+    try { localStorage.setItem('chatPreload', `Thought Leadership: "${card.title || ''}". Source: ${card.url || card.sourceUrl || ''}`); } catch {}
+    $('[data-tab="chat"]')?.click();
+  });
+  activeCard.querySelector('.tl-notebook')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title:        card.title || 'Thought Leadership',
+          description:  card.tldr || card.description || '',
+          source_url:   card.url || card.sourceUrl || '',
+          image_url:    card.image || null,
+          kind:         'thought_leadership',
+        }),
+      });
+      showSaveStatus?.('Saved to notebook');
+    } catch (err) { console.warn('TL → note failed', err); }
+  });
+  activeCard.querySelectorAll('.deck-feedback-mini').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const vote = btn.dataset.vote;
+      activeCard.querySelectorAll('.deck-feedback-mini').forEach(b => b.classList.remove('voted'));
+      btn.classList.add('voted');
+      const now = new Date();
+      const dk = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headline: card.title || '', category: 'thought_leadership', source: card.source, vote, dateKey: dk }),
+      }).catch(() => {});
     });
   });
 }
@@ -541,8 +620,23 @@ let openClusterId  = null;
 function renderEarningsWatch(items) {
   const el = $('#earningsWatch');
   if (!el) return;
-  if (!items?.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  // Always show the section on us_business, even before earnings load.
   el.classList.remove('hidden');
+  if (!items?.length) {
+    el.innerHTML = `
+      <div class="earn-title">Earnings Watch <span class="earn-sub">latest from MarketBeat</span></div>
+      <div class="earn-list">
+        ${Array.from({ length: 3 }, () => `
+          <div class="earn-card earn-skeleton">
+            <div class="earn-thumb skeleton-block"></div>
+            <div class="earn-body">
+              <div class="skeleton-line" style="width:75%;height:14px"></div>
+              <div class="skeleton-line" style="width:90%"></div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+    return;
+  }
   el.innerHTML = `
     <div class="earn-title">Earnings Watch <span class="earn-sub">latest from MarketBeat</span></div>
     <div class="earn-list">
@@ -565,8 +659,20 @@ function renderEarningsWatch(items) {
 
 function renderTopicClusters(clusters) {
   const el = $('#topicClusters');
-  if (!clusters?.length) { el.classList.add('hidden'); return; }
+  if (!el) return;
+  // Always show the section frame on the top_today tab, even when content is
+  // not yet ready (deep dives stream in after the initial digest payload).
   el.classList.remove('hidden');
+  if (!clusters?.length) {
+    el.innerHTML = `<div class="tc-title">Deep Dives</div>` +
+      Array.from({ length: 5 }, () => `
+        <div class="tc-row tc-skeleton">
+          <div class="tc-header">
+            <span class="tc-name skeleton-line" style="width:60%">&nbsp;</span>
+          </div>
+        </div>`).join('');
+    return;
+  }
   clusterState.clear();
   openClusterId = null;
 
