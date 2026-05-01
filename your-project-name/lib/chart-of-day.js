@@ -24,16 +24,66 @@
  */
 
 const storage = require('./storage');
+const https   = require('https');
+const zlib    = require('zlib');
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
+/**
+ * Curl-style HTTPS GET that follows redirects and decompresses gzip/deflate/br.
+ * Used for hosts (e.g., nitter.net) that respond with empty bodies to Node's
+ * built-in fetch but work fine with curl-equivalent header sequences.
+ */
+function httpsGetText(url, { headers = {}, timeoutMs = 12000, maxRedirects = 5 } = {}) {
+  return new Promise((resolve, reject) => {
+    const reqHeaders = {
+      'User-Agent':      UA,
+      'Accept':          '*/*',
+      'Accept-Encoding': 'gzip, deflate',
+      'Connection':      'close',
+      ...headers,
+    };
+    const req = https.get(url, { headers: reqHeaders }, res => {
+      // Follow redirects.
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && maxRedirects > 0) {
+        const next = new URL(res.headers.location, url).toString();
+        res.resume();
+        return resolve(httpsGetText(next, { headers, timeoutMs, maxRedirects: maxRedirects - 1 }));
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      let stream = res;
+      const enc = (res.headers['content-encoding'] || '').toLowerCase();
+      if (enc === 'gzip')         stream = res.pipe(zlib.createGunzip());
+      else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
+      else if (enc === 'br')      stream = res.pipe(zlib.createBrotliDecompress());
+      const chunks = [];
+      stream.on('data', c => chunks.push(c));
+      stream.on('end',  ()  => resolve(Buffer.concat(chunks).toString('utf8')));
+      stream.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error('timeout')); });
+  });
+}
+
+// Nitter mirrors used to scrape Twitter/X timelines as RSS. We try them in order;
+// first one that returns a 200 with parseable RSS wins. Add more as they prove
+// reliable; the default of nitter.net has been the most stable mirror.
+const NITTER_MIRRORS = [
+  'https://nitter.net',
+];
+
 const DEFAULT_SOURCES = [
-  // chartFirst=true means the RSS hero image IS the chart (dedicated chart feeds).
+  // chartFirst=true means the source's hero image IS the chart (dedicated chart feeds / chart-y Twitter accounts).
   // chartFirst=false means we must verify by scraping the article body for an actual
   // chart-like image; if none, the entry is dropped.
-  { name: 'Charlie Bilello',   kind: 'rss', url: 'https://bilello.blog/category/chart-of-the-day/feed/', chartFirst: true },
-  { name: 'Apollo Academy',    kind: 'rss', url: 'https://www.apolloacademy.com/feed/',                  chartFirst: true },
-  { name: 'NYT Business',      kind: 'rss', url: 'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml', chartFirst: false },
+  // For kind='twitter' the `url` field is the X/Twitter handle (with or without @, or a full twitter.com/x.com profile URL).
+  { name: 'Charlie Bilello',   kind: 'twitter', url: 'https://twitter.com/charliebilello', chartFirst: true },
+  { name: 'Apollo Academy',    kind: 'rss',     url: 'https://www.apolloacademy.com/feed/', chartFirst: true },
+  { name: 'NYT Business',      kind: 'rss',     url: 'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml', chartFirst: false },
 ];
 
 async function getChartSources() {
@@ -201,7 +251,117 @@ async function scrapeRss(source) {
   return charts;
 }
 
-// ── HTML scraping (legacy / fallback) ────────────────────────────────────────
+// ── Twitter/X scraping via Nitter ───────────────────────────────────────────────────────
+
+/** Extract the @handle from any of: "@handle", "handle", "https://twitter.com/handle", "https://x.com/handle/...". */
+function extractTwitterHandle(input) {
+  if (!input) return null;
+  const s = String(input).trim().replace(/^@/, '');
+  // Full URL?
+  const m = s.match(/(?:twitter\.com|x\.com|nitter\.net)\/([A-Za-z0-9_]{1,15})/i);
+  if (m) return m[1];
+  // Bare handle?
+  if (/^[A-Za-z0-9_]{1,15}$/.test(s)) return s;
+  return null;
+}
+
+/**
+ * Convert a Nitter image-proxy URL into the original pbs.twimg.com URL.
+ * e.g. https://nitter.net/pic/media%2FHG26Df9bwAAWapR.png
+ *   → https://pbs.twimg.com/media/HG26Df9bwAAWapR.png
+ */
+function unwrapNitterImage(url) {
+  if (!url) return url;
+  const m = url.match(/\/pic\/(.+)$/);
+  if (!m) return url;
+  let path = m[1];
+  try { path = decodeURIComponent(path); } catch {}
+  // Sometimes Nitter prefixes with "orig/" for full-size variants.
+  path = path.replace(/^orig\//, '');
+  // The remaining path is e.g. "media/HG26Df9bwAAWapR.png" or "media/...?name=orig"
+  return `https://pbs.twimg.com/${path}`;
+}
+
+async function fetchNitterRss(handle) {
+  let lastErr;
+  for (const base of NITTER_MIRRORS) {
+    const url = `${base}/${handle}/rss`;
+    try {
+      // Use httpsGetText, not fetch — Nitter responds with empty bodies to
+      // Node's built-in undici fetch but works with curl-style HTTPS GET.
+      const xml = await httpsGetText(url, {
+        headers: { Accept: 'application/rss+xml, application/xml, text/xml, */*' },
+        timeoutMs: 12000,
+      });
+      if (!xml.includes('<item') && !xml.includes('<entry')) {
+        lastErr = new Error(`No items in feed from ${base}`); continue;
+      }
+      return xml;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('All Nitter mirrors failed');
+}
+
+async function scrapeTwitter(source) {
+  const handle = extractTwitterHandle(source.url);
+  if (!handle) throw new Error(`Cannot extract handle from "${source.url}"`);
+  const xml = await fetchNitterRss(handle);
+
+  const itemRe = /<item[^>]*>([\s\S]*?)<\/item>/gi;
+  const charts = [];
+  let scanned = 0;
+  const maxScan = 12;
+  let m;
+  while ((m = itemRe.exec(xml)) !== null && charts.length < 1 && scanned < maxScan) {
+    scanned++;
+    const block = m[1];
+
+    // Skip retweets so we always show the user's own original chart tweets.
+    const titleRaw = (block.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || '');
+    if (/^\s*(?:<!\[CDATA\[)?\s*RT by /i.test(titleRaw)) continue;
+
+    // Find an image in the description (Nitter inlines <img> for media tweets).
+    const desc = block.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || '';
+    const imgM = desc.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (!imgM) continue;
+    const image = unwrapNitterImage(imgM[1].startsWith('//') ? 'https:' + imgM[1] : imgM[1]);
+    if (!image || /\/profile_images\//i.test(image)) continue;
+
+    // Drop low-signal social tweets (Follow Friday shoutouts, single-line replies).
+    // We want chart-bearing posts: substantive caption text (>= 40 chars) and not
+    // dominated by @-mentions / hashtags relative to body length.
+    const cleanTitle = stripTags(titleRaw).replace(/\s+/g, ' ').trim();
+    if (cleanTitle.length < 40) continue;
+    if (/^#FF\b/i.test(cleanTitle)) continue;
+    // If the tweet is mostly @mentions (e.g. "FF @x @y, a great follow!"), drop it.
+    const mentions = (cleanTitle.match(/@\w+/g) || []).length;
+    const words    = cleanTitle.split(/\s+/).length;
+    if (mentions >= 2 && mentions / Math.max(1, words) > 0.3) continue;
+
+    const title = stripTags(titleRaw).slice(0, 140) || 'Chart';
+    const link  = stripTags(block.match(/<link>([\s\S]*?)<\/link>/i)?.[1] || '');
+    // Convert Nitter status link → x.com status link so the user opens the real tweet.
+    const tweetUrl = link
+      ? link.replace(/https?:\/\/[^/]+/, 'https://x.com').replace(/#m$/, '')
+      : `https://x.com/${handle}`;
+    const pubDate = stripTags(block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1] || '');
+
+    charts.push({
+      title,
+      image,
+      source:    source.name,
+      sourceUrl: `https://x.com/${handle}`,
+      postUrl:   tweetUrl,
+      postedAt:  pubDate || null,
+      context:   title,
+    });
+  }
+  return charts;
+}
+
+// ── HTML scraping (legacy / fallback) ────────────────────────────────────
 
 async function scrapeHtmlPage(source) {
   const resp = await fetch(source.url, {
@@ -243,7 +403,10 @@ async function fetchCharts() {
     if (s.enabled === false) continue;
     try {
       const kind = s.kind || 'rss';
-      const charts = kind === 'html' ? await scrapeHtmlPage(s) : await scrapeRss(s);
+      let charts;
+      if (kind === 'twitter')      charts = await scrapeTwitter(s);
+      else if (kind === 'html')    charts = await scrapeHtmlPage(s);
+      else                          charts = await scrapeRss(s);
       if (charts && charts.length) out.push(charts[0]);
     } catch (e) {
       console.warn(`[chart] ${s.name} failed: ${e.message}`);
