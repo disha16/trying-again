@@ -975,6 +975,11 @@ async function runDigestSSE(req, res) {
               tlCards = await thoughtLeadership.buildLLMFallbackDeck(
                 digest.top_today || [], digestModel
               );
+              // Upgrade undraw fallbacks to real publisher images via Serper.
+              if (tlCards.length && thoughtLeadership.upgradeLLMFallbackImages) {
+                try { await thoughtLeadership.upgradeLLMFallbackImages(tlCards); }
+                catch (e3) { console.warn('[cron/digest] TL image upgrade error:', e3.message); }
+              }
               if (tlCards.length) console.log(`[cron/digest] thought leadership: ${tlCards.length} LLM-fallback cards`);
             } catch (e2) { console.warn('[cron/digest] TL LLM fallback error:', e2.message); }
           } else {

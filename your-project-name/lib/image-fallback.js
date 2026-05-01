@@ -75,21 +75,29 @@ async function serperImage(query) {
  * @param {string=} sourceHint  Optional source name to add specificity (e.g., "Reuters")
  * @returns {Promise<string|null>}
  */
-async function findImage(headline, sourceHint) {
-  const key = `${(headline || '').slice(0, 200)}|${sourceHint || ''}`;
+async function findImage(headline, sourceHint, sourceUrlHint) {
+  const key = `${(headline || '').slice(0, 200)}|${sourceHint || ''}|${sourceUrlHint || ''}`;
   if (cache.has(key)) return cache.get(key);
   if (!headline) { cache.set(key, null); return null; }
 
-  // Build a focused image query
-  const q = sourceHint
-    ? `${headline} ${sourceHint}`
-    : headline;
+  // Derive host from sourceUrlHint (if present) for a `site:` query that's far
+  // more likely to match the publisher's own page (huge for niche sources).
+  let host = '';
+  try { if (sourceUrlHint) host = new URL(sourceUrlHint).hostname.replace(/^www\./i, ''); } catch {}
 
-  // Right now the only image-only provider we wire in is Serper. (Exa images
-  // come back attached to the main search results; Tavily images come back
-  // in the same response as well.) If Serper isn't configured we just return
-  // null and the caller falls through to undraw.
-  const img = await serperImage(q);
+  // Attempt 1: "<headline> site:<host>" — usually returns the publisher's own image.
+  let img = null;
+  if (host) img = await serperImage(`${headline} site:${host}`);
+
+  // Attempt 2: "<headline> <source>" — broader, but still focused on the publisher.
+  if (!img) {
+    const q = sourceHint ? `${headline} ${sourceHint}` : headline;
+    img = await serperImage(q);
+  }
+
+  // Attempt 3: just the headline.
+  if (!img && (host || sourceHint)) img = await serperImage(headline);
+
   cache.set(key, img);
   return img;
 }
@@ -98,11 +106,11 @@ async function findImage(headline, sourceHint) {
  * Bulk attach images to a list of items in parallel, capped at maxLookups
  * Serper calls per run so we don't blow through quota.
  */
-async function attachImages(items, { maxLookups = 30, sourceField = 'source' } = {}) {
+async function attachImages(items, { maxLookups = 30, sourceField = 'source', urlField = 'sourceUrl' } = {}) {
   const need = items.filter(it => it && !it.image && it.headline);
   const slice = need.slice(0, maxLookups);
   await Promise.all(slice.map(async it => {
-    const img = await findImage(it.headline, it[sourceField]);
+    const img = await findImage(it.headline, it[sourceField], it[urlField] || it.url);
     if (img) it.image = img;
   }));
   return items;

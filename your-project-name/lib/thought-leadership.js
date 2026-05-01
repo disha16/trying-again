@@ -194,6 +194,15 @@ async function buildThoughtLeadershipDeck(entries, model = 'llama-3.3-70b-versat
         .replace(/[^a-zA-Z\s]/g, ' ')
         .split(/\s+/).filter(w => w.length > 5).slice(0, 3).join(' ') || 'ideas';
       card.image = await pickImageForTopic(topic, e);
+      // If we ended up on undraw, try Serper Images using the actual title +
+      // publisher name — that usually returns the publisher's own hero image.
+      if (card.image && /cdn\.jsdelivr\.net\/gh\/balazser\/undraw/i.test(card.image)) {
+        try {
+          const { findImage } = require('./image-fallback');
+          const better = await findImage(card.title, card.source);
+          if (better) card.image = better;
+        } catch { /* keep undraw */ }
+      }
       cards.push(card);
     } catch (err) {
       console.warn(`[tl] failed to summarise ${e.id}: ${err.message}`);
@@ -280,10 +289,26 @@ Rules:
                        ? p.key_points.slice(0, 3).map(s => String(s).replace(/\s*\.\s*$/, '').trim())
                        : [],
       readingMinutes: p.reading_minutes || 1,
-      image:          require('./undraw').pick(imgKey),
+      image:          require('./undraw').pick(imgKey),  // overridden below if Serper finds a real image
       isLLMFallback:  true,
+      _imgQuery:      `${p.title || ''} ${p.source_label || ''}`.trim(),
     };
   });
 }
+
+// LLM-fallback cards: try to upgrade undraw to a real publisher image via Serper.
+module.exports.upgradeLLMFallbackImages = async function (cards) {
+  if (!Array.isArray(cards) || !cards.length) return cards;
+  const { findImage } = require('./image-fallback');
+  await Promise.all(cards.map(async c => {
+    if (!c?._imgQuery) return;
+    try {
+      const img = await findImage(c._imgQuery);
+      if (img) c.image = img;
+    } catch { /* keep undraw */ }
+    delete c._imgQuery;
+  }));
+  return cards;
+};
 
 module.exports.buildLLMFallbackDeck = buildLLMFallbackDeck;
