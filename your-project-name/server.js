@@ -153,6 +153,38 @@ app.delete('/sources/:id', async (req, res) => {
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 // ─── Temporary debug: check Supabase storage keys ─────────────────────────────
+app.get('/api/debug-twitter', async (req, res) => {
+  const https = require('https');
+  const zlib  = require('zlib');
+  const handle = req.query.handle || 'charliebilello';
+  const probes = ['https://nitter.net', 'https://nitter.poast.org', 'https://nitter.tiekoetter.com', 'https://nitter.privacydev.net', 'https://nitter.cz'];
+  const results = [];
+  function probe(url) {
+    return new Promise(resolve => {
+      const t0 = Date.now();
+      const req = https.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh) AppleWebKit Chrome/126.0 Safari/537.36', 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate', 'Connection': 'close' },
+      }, r => {
+        let stream = r;
+        const enc = (r.headers['content-encoding'] || '').toLowerCase();
+        if (enc === 'gzip')      stream = r.pipe(zlib.createGunzip());
+        else if (enc === 'deflate') stream = r.pipe(zlib.createInflate());
+        const chunks = [];
+        stream.on('data', c => chunks.push(c));
+        stream.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          resolve({ url, status: r.statusCode, ce: enc || null, ms: Date.now() - t0, len: body.length, hasItem: body.includes('<item'), preview: body.slice(0, 120) });
+        });
+        stream.on('error', e => resolve({ url, error: 'stream:' + e.message, ms: Date.now() - t0 }));
+      });
+      req.on('error', e => resolve({ url, error: 'req:' + e.message, ms: Date.now() - t0 }));
+      req.setTimeout(8000, () => { req.destroy(new Error('timeout')); resolve({ url, error: 'timeout', ms: Date.now() - t0 }); });
+    });
+  }
+  for (const base of probes) results.push(await probe(`${base}/${handle}/rss`));
+  res.json({ handle, results });
+});
+
 app.get('/api/debug-storage', async (req, res) => {
   try {
     const tokens = await storage.getGmailTokens();
