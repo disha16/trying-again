@@ -28,9 +28,12 @@ const storage = require('./storage');
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
 const DEFAULT_SOURCES = [
-  { name: 'Charlie Bilello',   kind: 'rss', url: 'https://bilello.blog/category/chart-of-the-day/feed/' },
-  { name: 'Apollo Academy',    kind: 'rss', url: 'https://www.apolloacademy.com/feed/' },
-  { name: 'NYT Business',      kind: 'rss', url: 'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml' },
+  // chartFirst=true means the RSS hero image IS the chart (dedicated chart feeds).
+  // chartFirst=false means we must verify by scraping the article body for an actual
+  // chart-like image; if none, the entry is dropped.
+  { name: 'Charlie Bilello',   kind: 'rss', url: 'https://bilello.blog/category/chart-of-the-day/feed/', chartFirst: true },
+  { name: 'Apollo Academy',    kind: 'rss', url: 'https://www.apolloacademy.com/feed/',                  chartFirst: true },
+  { name: 'NYT Business',      kind: 'rss', url: 'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml', chartFirst: false },
 ];
 
 async function getChartSources() {
@@ -42,8 +45,64 @@ async function getChartSources() {
   return DEFAULT_SOURCES;
 }
 
-// ── RSS parsing ──────────────────────────────────────────────────────────────
+// ── Article-body chart verification ──────────────────────────────────────────────
 
+// Image hosts/paths that strongly indicate a real data visualization. Used to
+// confirm a general-news article (NYT etc.) actually contains a chart before
+// we promote it as Chart of the Day.
+const CHART_IMG_HOST_RE = /(datawrapper\.dwcdn\.net|cf\.datawrapper\.de|public\.tableau\.com|chartblocks|highcharts|infogram|flourish\.studio|g\.foolcdn\.com\/.*\/chart|static01\.nyt\.com\/[^"']*?(?:graphic|chart|svg))/i;
+// Alt-text or filename hints that a given <img> is a chart/graph/figure.
+const CHART_IMG_HINT_RE = /\b(chart|graph|graphic|figure|trend|infographic|plot|histogram|bar|line|pie)\b/i;
+
+/**
+ * Fetch the article HTML and return the URL of an in-body chart image, or null.
+ * Looks for: known chart-CDN hosts, chart-named filenames, alt-text hints, and
+ * datawrapper/Tableau iframes (in which case we can't easily extract the image
+ * URL but we know a chart exists — the function still returns null in that case
+ * so caller drops the entry; better to drop than to show a misleading hero shot).
+ */
+async function findChartImageInArticle(postUrl) {
+  if (!postUrl) return null;
+  try {
+    const resp = await fetch(postUrl, {
+      headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml' },
+      signal:  AbortSignal.timeout(8000),
+      redirect: 'follow',
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+
+    // Pass 1: <img> whose src matches a known chart CDN.
+    const imgRe = /<img\b[^>]+>/gi;
+    let m;
+    let bestHint = null;
+    while ((m = imgRe.exec(html)) !== null) {
+      const tag = m[0];
+      const src = (tag.match(/\bsrc=["']([^"']+)["']/i) || [])[1] || '';
+      const alt = (tag.match(/\balt=["']([^"']*)["']/i) || [])[1] || '';
+      if (!src) continue;
+      if (/logo|sprite|avatar|tracking|pixel|favicon/i.test(src)) continue;
+      // Strong signal: known chart CDN.
+      if (CHART_IMG_HOST_RE.test(src)) {
+        return src.startsWith('//') ? 'https:' + src : src;
+      }
+      // Medium signal: chart-y alt text or filename.
+      if (!bestHint && (CHART_IMG_HINT_RE.test(alt) || CHART_IMG_HINT_RE.test(src))) {
+        bestHint = src.startsWith('//') ? 'https:' + src : src;
+      }
+    }
+    if (bestHint) return bestHint;
+
+    // Pass 2: chart-bearing iframe (datawrapper/tableau/flourish). We can't
+    // screenshot it cheaply, so report "no extractable chart image" — caller
+    // drops the entry rather than show a hero photo.
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── RSS parsing ─────────────────────────────────────────────────────────────────────────
 function decodeXml(s) {
   if (!s) return '';
   return String(s)
@@ -92,15 +151,21 @@ async function scrapeRss(source) {
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const xml = await resp.text();
 
-  // Items / entries
-  const itemRe = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
-  const charts = [];
+  const chartFirst = source.chartFirst !== false; // default true for back-compat
+
+  // Items / entries. For chartFirst sources we stop at the first usable item;
+  // for general feeds we may scan up to N items, dropping non-chart ones.
+  const itemRe   = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
+  const maxScan  = chartFirst ? 5 : 10;  // scan further on general feeds to find one that has a chart
+  const charts   = [];
+  let scanned    = 0;
   let m;
-  while ((m = itemRe.exec(xml)) !== null && charts.length < 1) {
+  while ((m = itemRe.exec(xml)) !== null && charts.length < 1 && scanned < maxScan) {
+    scanned++;
     const block = m[1] || m[2] || '';
-    const image = extractImage(block);
-    if (!image) continue;
-    if (/logo|sprite|avatar|tracking|pixel|favicon/i.test(image)) continue;
+    const rssImage = extractImage(block);
+    if (chartFirst && !rssImage) continue;
+    if (chartFirst && /logo|sprite|avatar|tracking|pixel|favicon/i.test(rssImage)) continue;
 
     const title   = stripTags(block.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || 'Chart').slice(0, 140);
     const link    = stripTags(block.match(/<link[^>]*>([\s\S]*?)<\/link>/i)?.[1] || '')
@@ -108,6 +173,20 @@ async function scrapeRss(source) {
     const desc    = stripTags(block.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || '').slice(0, 240);
     const pubDate = stripTags(block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1]
                            || block.match(/<published>([\s\S]*?)<\/published>/i)?.[1] || '');
+
+    let image = rssImage;
+
+    // For general-purpose feeds: verify the article actually contains a chart.
+    // The RSS hero is almost always a stock photo — if no in-body chart image
+    // is found, drop this entry rather than ship a misleading photo.
+    if (!chartFirst) {
+      const chartImg = await findChartImageInArticle(link);
+      if (!chartImg) {
+        console.log(`[chart] ${source.name}: "${title.slice(0, 60)}" — no chart in body, skipping`);
+        continue;
+      }
+      image = chartImg;
+    }
 
     charts.push({
       title,
