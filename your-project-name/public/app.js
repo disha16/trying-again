@@ -2181,19 +2181,22 @@ function maybeFirstVisitForceSonnetRefresh() {
 
   // Show a soft, non-blocking banner above the (already-rendered) cached
   // digest so the user has something to look at while the Sonnet refresh runs.
+  // Themed via CSS variables so it adapts to light (warm peach) and dark mode.
   let banner = document.getElementById('firstVisitBanner');
   if (!banner) {
     banner = document.createElement('div');
     banner.id = 'firstVisitBanner';
-    banner.style.cssText =
-      'margin:12px 0;padding:14px 18px;border-radius:12px;background:#1d2638;' +
-      'color:#e7eaf3;font-size:14px;line-height:1.5;display:flex;align-items:center;gap:12px;';
+    banner.className = 'first-visit-banner';
     banner.innerHTML =
-      '<span class="spinner" style="width:14px;height:14px;border:2px solid #4f6079;border-top-color:#9bb4ff;border-radius:50%;display:inline-block;animation:spin 0.9s linear infinite;"></span>' +
-      '<span><strong>Brewing your personalised digest with Sonnet —</strong> ' +
+      '<span class="fv-spinner" aria-hidden="true"></span>' +
+      '<span class="fv-text"><strong>Brewing your personalised digest —</strong> ' +
       'this only takes this long when it loads for the first time. ' +
-      'Carry on; we’ll swap in the upgraded version when it’s ready.</span>';
+      'Carry on; we’ll swap in the upgraded version when it’s ready.</span>' +
+      '<button class="fv-close" type="button" aria-label="Dismiss">×</button>';
     digestArea.parentNode.insertBefore(banner, digestArea);
+    banner.querySelector('.fv-close')?.addEventListener('click', () => {
+      try { banner.remove(); } catch {}
+    });
   }
 
   const es = new EventSource('/api/run-digest?force=true&forceModel=sonnet&firstVisit=1');
