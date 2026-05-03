@@ -47,7 +47,26 @@ function cleanText(t) {
     .trim();
 }
 
-const ANGLES_BATCH_SYSTEM = `You are a Sequoia-memo style analyst. You receive an array of top news stories with rich source material (newsletter excerpt + optional web articles). For EACH story you must produce exactly 5 distinct angles.
+const ANGLES_BATCH_SYSTEM = `You are a Sequoia-memo / Stratechery analyst writing the 'Deep Dive' section of a daily intelligence brief for senior investors.
+
+You receive an array of top news stories. For EACH story produce 2-5 distinct angles. PREFER FEWER, BETTER ANGLES OVER MORE, WEAKER ANGLES.
+
+!!! HARD RULE — PARAPHRASE TEST !!!
+If two of your angles for the same story can be summarised in the SAME 5-word sentence, they are paraphrases and you MUST drop one. Different angles must answer DIFFERENT QUESTIONS about the news. They are not 'five ways to say the same thing'.
+
+GOOD example for a story 'Google in talks with Marvell to build new AI inference chips':
+  Angle 1 (KEY_NUMBER_OR_DATA): 'Google plans 1M Ironwood TPUs in 2026 — Marvell deal could 4× that' — specific volume + read-through.
+  Angle 2 (WHO_WINS_LOSES): 'Broadcom loses its only hyperscaler custom-silicon partner' — specific named loser + why.
+  Angle 3 (COMPETITIVE_READTHROUGH): 'Why this is OpenAI's Nvidia problem in disguise' — second-order industry impact.
+  Angle 4 (HIDDEN_SECOND_ORDER_EFFECT): 'TSMC capacity reallocation is the real story' — supply-chain knock-on.
+  Angle 5 (WHAT_HAPPENS_NEXT): 'Watch Q1 2026 earnings for the first chip-revenue line item' — concrete tripwire.
+
+BAD example for the same story (REJECT — these are 5 paraphrases):
+  'Google in talks with Marvell to build new AI inference chips'
+  'Google in Talks With Marvell to Build New AI Chips for Inference'
+  'Google in talks with Marvell to build new AI chips, The Information reports'
+  'Google is in talks with Marvell to build custom AI inference chips'
+  'Google Reportedly Pulls Marvell Into a Two-Chip TPU Plan'
 
 Return ONLY valid JSON — no markdown, no preamble:
 {
@@ -55,10 +74,6 @@ Return ONLY valid JSON — no markdown, no preamble:
     {
       "story_index": 0,
       "angles": [
-        { "headline": "...", "description": "...", "dimension": "..." },
-        { "headline": "...", "description": "...", "dimension": "..." },
-        { "headline": "...", "description": "...", "dimension": "..." },
-        { "headline": "...", "description": "...", "dimension": "..." },
         { "headline": "...", "description": "...", "dimension": "..." }
       ]
     },
@@ -66,31 +81,34 @@ Return ONLY valid JSON — no markdown, no preamble:
   ]
 }
 
-Required dimensions — each story's 5 angles MUST come from 5 DIFFERENT dimensions below:
-- WHAT_HAPPENED: bare facts, names, numbers, dates
+Dimensions to draw from (each angle MUST use a different one; pick the 2-5 that genuinely apply to the story):
+- WHAT_HAPPENED: bare facts, names, numbers, dates (use this for AT MOST one angle, and only if needed)
 - ECONOMIC_IMPACT: market, trade, jobs, prices, GDP consequences
 - POLITICAL_REACTION: who said what, who's pushing back, alliances shifting
-- WHO_WINS_LOSES: specific named beneficiaries and victims, with why
+- WHO_WINS_LOSES: specific named beneficiaries / victims, with why
 - HISTORICAL_PARALLEL: prior precedent or pattern this fits
 - WHAT_HAPPENS_NEXT: concrete next steps, decision points, deadlines
-- HIDDEN_SECOND_ORDER_EFFECT: a non-obvious downstream consequence
+- HIDDEN_SECOND_ORDER_EFFECT: non-obvious downstream consequence
 - KEY_NUMBER_OR_DATA: the single statistic that captures the story
 - COMPETITIVE_READTHROUGH: what this implies for adjacent companies / sectors
 - USER_OR_CONSUMER_BEHAVIOUR: how end-user / customer / audience behaviour changes
+- POLICY_OR_REGULATION: regulatory angle, antitrust, compliance read-through
+- PEOPLE_TO_WATCH: specific named individuals whose moves matter
 
-Voice rules (Sequoia-memo, Stratechery long-form):
+Voice rules (Sequoia memo, Stratechery long-form):
 - DECLARATIVE. Lead with what happened, the number, the mechanism.
 - FACT-DENSE. Every angle headline must be specific — names, figures, countries.
 - ONE DEGREE OF SYNTHESIS per angle: the description gives the reader one non-obvious connection.
-- Forbidden words: "game-changer", "revolutionary", "stunning", "shocking", "epic", "dramatic", "massive", "unprecedented" (unless literally true), "watershed", "sea change", "paradigm shift", "this could prove", "only time will tell".
-- headline: under 90 chars, specific, NOT a rephrase of the parent headline.
-- description: exactly 2 sentences, max 220 chars total. Sentence 1: the specific fact / claim. Sentence 2: the synthesis — pattern, comparison, mechanism, or non-obvious consequence.
+- Forbidden words: 'game-changer', 'revolutionary', 'stunning', 'shocking', 'epic', 'dramatic', 'massive', 'unprecedented' (unless literally true), 'watershed', 'sea change', 'paradigm shift', 'this could prove', 'only time will tell'.
+- headline: under 90 chars, specific, MUST NOT be a rephrase of the parent headline.
+- description: 2-3 sentences, 140-280 chars. Sentence 1: the specific fact / claim. Sentence 2: the synthesis — pattern, comparison, mechanism, or non-obvious consequence.
 
 Critical:
 - Output ONE entry per input story, in the same order. story_index matches input position.
-- Use the NEWSLETTER_EXCERPT as the primary source. Use WEB_EXCERPTS only to add what the newsletter doesn't cover.
+- Use NEWSLETTER_EXCERPT as primary source. Use WEB_EXCERPTS to add what the newsletter doesn't cover.
 - Do NOT contradict the newsletter excerpt; do NOT invent numbers or quotes.
-- If a story's source material genuinely cannot support 5 distinct dimensions, return fewer angles for that one (never duplicate dimensions).`;
+- If a story can only support 2 strong angles, return 2 — NEVER pad to 5 with paraphrases.
+- Prefer 3 strong, distinct angles over 5 weak, overlapping ones.`;
 
 /**
  * Decide whether to skip web search for a story.
@@ -312,14 +330,25 @@ async function _attachSourcesAndImages(story, angles, ctx, useInternet) {
     }
   }
 
+  // Pass 4: if seed url is empty, look at the cluster's pool for a fallback url
+  // (so cards are at least clickable to a related publisher).
+  let fallbackPoolUrl = '';
+  let fallbackPoolSource = '';
+  if (!parentUrl && pool.length) {
+    fallbackPoolUrl = pool[0].url;
+    fallbackPoolSource = pool[0].source;
+  }
+
   return angles.map((a, i) => {
     const r = assignments[i];
+    const src = r?.source || parentSrc || fallbackPoolSource || '';
+    const url = r?.url    || parentUrl || fallbackPoolUrl    || '';
     return {
       headline:       a.headline,
       description:    a.description,
       dimension:      a.dimension,
-      source:         r?.source    || parentSrc || '',
-      sourceUrl:      r?.url       || parentUrl || '',
+      source:         src,
+      sourceUrl:      url,
       image:          r?.image     || require('./undraw').pick(a.headline || story.headline || ''),
       internetSource: !!r,
     };
@@ -348,11 +377,17 @@ async function buildAnglesForTopStories(stories, useInternet, model) {
     return { newsletterExcerpt, webResults };
   }));
 
-  // 2) ONE batched LLM call across all top stories
+  // 2) ONE batched LLM call across all top stories.
+  // ALWAYS use Sonnet for angles regardless of digestModel — Haiku reliably
+  // produces 5 paraphrases of the seed headline rather than 5 distinct
+  // dimensional takes. The cost is one Sonnet call per refresh; worth it for
+  // the most-visible 'Deep Dive' surface.
+  const SONNET_MODEL = 'claude-sonnet-4-5-20250929';
+  const angleModel = process.env.ANTHROPIC_API_KEY ? SONNET_MODEL : model;
   let parsed = null;
   try {
     const prompt = _buildBatchPrompt(top, contextByIndex);
-    const raw    = await _callModel(model, prompt, ANGLES_BATCH_SYSTEM);
+    const raw    = await _callModel(angleModel, prompt, ANGLES_BATCH_SYSTEM);
     parsed = _parseBatchResponse(raw, top.length);
     if (!parsed) console.warn('[angles] batched LLM call returned no parseable JSON. Raw head:', (raw || '').slice(0, 200));
   } catch (e) {

@@ -1,6 +1,23 @@
 'use strict';
 
 const { _callModel } = require('./digest-generator');
+const { fetchArticleBodies } = require('./article-fetcher');
+
+const REWRITE_SYSTEM = `You are a Sequoia-memo / Stratechery analyst writing 2-sentence article descriptions for a daily intelligence brief read by senior investors.
+
+For each article you receive (with HEADLINE and BODY_EXCERPT), write a fact-dense, declarative 2-sentence description.
+
+Return ONLY a valid JSON array, one entry per input, in order:
+[{ "i": 1, "description": "..." }, ...]
+
+Each description MUST:
+- Be 2 sentences, 140-300 chars total.
+- Sentence 1: the specific fact, number, or event — names, figures, places.
+- Sentence 2: the synthesis — why this matters, what it implies, who wins/loses, or the non-obvious second-order effect. NOT a generic 'this could affect things'.
+- Be GROUNDED in the BODY_EXCERPT — do not invent numbers or quotes.
+- Use declarative voice. Forbidden words: 'game-changer', 'revolutionary', 'stunning', 'shocking', 'epic', 'dramatic', 'massive', 'unprecedented' (unless literally true), 'watershed', 'sea change', 'paradigm shift', 'this could prove', 'only time will tell', 'underscoring', 'highlighting', 'amid'.
+- If the BODY_EXCERPT is empty or only headlines, write the best possible description from the headline alone, but keep it factual — do not invent.
+- Do NOT start with the article's headline. Do NOT include the publisher name.`;
 
 const JUDGE_SYSTEM = `You are a news editor reviewing search results to decide which ones are real, individual news articles vs garbage (homepage banners, section index pages, navigation lists, sponsor pages, login walls, calendar/program-listing pages).
 
@@ -303,6 +320,14 @@ async function applyInternetFallback(digest, customSections = [], model = 'qwen-
       }
 
       if (added.length) {
+        // Real content pass: fetch each article body and have the LLM rewrite
+        // the description in Sequoia voice using the actual article body. This
+        // replaces the raw Google search snippet with a real 2-sentence summary.
+        try {
+          await enrichDescriptionsFromArticles(added, model);
+        } catch (e) {
+          console.warn(`[internet-fallback] ${cat} description enrichment failed:`, e.message);
+        }
         digest[cat] = [...existing, ...added];
         totalAdded += added.length;
         const rejected = candidates.length - added.length;
@@ -316,4 +341,58 @@ async function applyInternetFallback(digest, customSections = [], model = 'qwen-
   console.log(`[internet-fallback] total added: ${totalAdded}`);
 }
 
-module.exports = { applyInternetFallback };
+/**
+ * Enrich web-sourced article descriptions: fetch article bodies, then run a
+ * single batched LLM call to rewrite each description in Sequoia voice using
+ * the actual article content rather than the search-result snippet.
+ *
+ * Mutates the items in place (sets item.description).
+ */
+async function enrichDescriptionsFromArticles(items, model) {
+  if (!Array.isArray(items) || !items.length) return;
+  // Fetch bodies in parallel (concurrency 8). Cap at 50 items to bound cost.
+  const targets = items.slice(0, 50);
+  const urls    = targets.map(it => it.sourceUrl || '');
+  const bodies  = await fetchArticleBodies(urls, 8);
+
+  // Build the LLM prompt. For items where body fetch failed, fall back to the
+  // existing snippet so the LLM has SOMETHING to summarise.
+  const list = targets.map((it, i) => {
+    const body = bodies[i] && bodies[i].length > 200
+      ? bodies[i].slice(0, 2200)
+      : (it.description || '').slice(0, 800);
+    return `[${i + 1}] HEADLINE: ${it.headline}\nBODY_EXCERPT:\n${body}`;
+  }).join('\n\n----------\n\n');
+
+  const prompt = `Rewrite the description for each of these ${targets.length} articles. Return JSON per the schema.\n\n${list}`;
+  let raw;
+  try {
+    raw = await _callModel(model, prompt, REWRITE_SYSTEM);
+  } catch (e) {
+    console.warn('[internet-fallback] description rewrite failed:', e.message);
+    return;
+  }
+  const match = raw && raw.match(/\[[\s\S]*\]/);
+  if (!match) {
+    console.warn('[internet-fallback] description rewrite returned no parseable JSON');
+    return;
+  }
+  let arr;
+  try { arr = JSON.parse(match[0]); } catch {
+    console.warn('[internet-fallback] description rewrite JSON parse failed');
+    return;
+  }
+  let upgraded = 0;
+  for (const v of arr) {
+    const i = Number(v.i) - 1;
+    if (!Number.isFinite(i) || i < 0 || i >= targets.length) continue;
+    const desc = String(v.description || '').trim();
+    if (desc.length < 60) continue;
+    targets[i].description = desc.slice(0, 320);
+    targets[i]._descRewritten = true;
+    upgraded++;
+  }
+  console.log(`[internet-fallback] rewrote descriptions: ${upgraded}/${targets.length}`);
+}
+
+module.exports = { applyInternetFallback, enrichDescriptionsFromArticles };

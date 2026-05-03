@@ -150,15 +150,7 @@ function _systemBase(model) {
     ? SECTION_RULES_STRICT
     : SECTION_RULES_RELAXED;
 
-  // Haiku tends to revert to neutral wire-service prose and ignore long
-  // stylistic instructions. Prepend an aggressive, example-driven intensifier
-  // so even Haiku produces fact-dense, synthesised descriptions.
-  const isHaiku = String(model || '').toLowerCase().includes('haiku');
-  const haikuKick = isHaiku
-    ? `\n\n!!! CRITICAL VOICE OVERRIDE — READ FIRST !!!\nYou are NOT a wire-service summariser. You are a smart-friend explainer who lays out the news AND tells the reader why it matters in the same breath.\n\nEvery description MUST contain:\n  (1) the central fact / number / mechanism ("what")\n  (2) one non-obvious read-through, comparison, or second-order effect ("so what") — written naturally, not as a bullet\n\nDo NOT write: "X has signed a deal with Y to do Z. The deal involves..."\nDO    write: "X has signed a $X bn deal with Y to do Z, reversing its 2018 promise to never do Z. The signal: every major frontier-model lab now has a defence-customer pipeline, which changes hiring math more than the headlines suggest."\n\nIf you find yourself writing "this could be significant", "the deal marks", "this represents a major step", or "the move highlights" — DELETE that sentence and replace it with a specific fact, number, or comparison.\n\nLength: 2-4 sentences, 140-320 chars. Density check: if a sentence could appear verbatim in a Reuters wire summary, REWRITE it.\n\n--- end of voice override ---\n`
-    : '';
-
-  return `${haikuKick}You are a senior news editor. You receive a list of deduplicated news story clusters (each with headline, sources, and keywords) and produce a structured JSON daily digest.
+  return `You are a senior news editor. You receive a list of deduplicated news story clusters (each with headline, sources, and keywords) and produce a structured JSON daily digest.
 
 Each item: { "headline": "...", "description": "...", "source": "<comma-separated sources>", "keywords": ["topic1", "topic2"] }
 
