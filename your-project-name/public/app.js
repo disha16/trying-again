@@ -849,12 +849,23 @@ $('#refreshBtn').addEventListener('click', () => {
     const digest = JSON.parse(e.data);
     enrichDigestWithClusters(digest);
     renderDigest(digest);
-    loadChartsOfDay();
+    // Note: do NOT call loadChartsOfDay() here — it triggers a separate fetch
+    // to /api/chart-of-day that races the SSE 'section:chart_of_day' event.
+    // The skeleton from renderDigest → loadChartsOfDay (called by renderCategory
+    // when cat=top_today) handles the in-between state; the section event will
+    // swap in real content as soon as it's ready.
     loadDateRolodex();
-    showStatus('Digest updated — enriching in background…', 'success');
+    showStatus('Digest updated — enriching sections in background…', 'success');
     btn.disabled = false;
     btn.textContent = '↻ Refresh';
-    // Keep the connection open so we can upgrade to the enriched digest when ready.
+    // Keep the connection open so we can stream per-section enrichment events.
+  });
+
+  es.addEventListener('section', e => {
+    try {
+      const { section, payload, top_today } = JSON.parse(e.data);
+      handleSectionEvent(section, payload, { top_today });
+    } catch (err) { console.warn('section handler:', err); }
   });
 
   es.addEventListener('enriched', e => {
@@ -862,7 +873,7 @@ $('#refreshBtn').addEventListener('click', () => {
       const digest = JSON.parse(e.data);
       enrichDigestWithClusters(digest);
       renderDigest(digest);
-      loadChartsOfDay();
+      // No explicit loadChartsOfDay() — each section was already streamed.
       showStatus('Deep dives, chart of day, and thought leadership ready!', 'success');
       setTimeout(hideStatus, 3000);
     } catch (err) { console.warn('enriched handler:', err); }
@@ -1861,12 +1872,53 @@ async function savePersona() {
   });
 }
 
+/**
+ * Streamed enrichment handler. Server emits per-section SSE events as each
+ * background task finishes (TL, earnings, deep-dive angles, chart of day).
+ * We mutate digestData so navigation away/back uses fresh data, AND re-render
+ * just that section so the UI updates incrementally without flashing the rest.
+ */
+function handleSectionEvent(section, payload, extra = {}) {
+  if (!digestData) digestData = {};
+  switch (section) {
+    case 'thought_leadership':
+      digestData.thought_leadership = payload;
+      try { renderThoughtLeadership(payload); } catch (e) { console.warn('[section] TL render', e); }
+      break;
+    case 'earnings':
+      digestData.earnings = payload;
+      try { renderEarningsWatch(payload); } catch (e) { console.warn('[section] earnings render', e); }
+      break;
+    case 'topic_clusters':
+      digestData.topic_clusters = payload;
+      // top_today carries angle counts on each story — keep it in sync so the
+      // category tabs reflect the new state.
+      if (Array.isArray(extra.top_today)) digestData.top_today = extra.top_today;
+      try { renderTopicClusters(payload); } catch (e) { console.warn('[section] topic_clusters render', e); }
+      break;
+    case 'chart_of_day':
+      digestData.chartOfDay = payload;
+      try { loadChartsOfDay(payload); } catch (e) { console.warn('[section] chart render', e); }
+      break;
+    default:
+      console.warn('[section] unknown section:', section);
+  }
+}
+
 /* ── Chart of the Day v2 (predefined sources: up to 5 image cards) ── */
-async function loadChartsOfDay() {
+async function loadChartsOfDay(preloadedPayload) {
   const el = $('#chartsOfDay');
   if (!el) return;
 
   el.classList.remove('hidden');
+
+  // Fast-path: SSE delivered the chart payload directly. Render immediately
+  // without a follow-up HTTP fetch.
+  if (preloadedPayload && Array.isArray(preloadedPayload.charts)) {
+    renderChartOfDayV2(el, preloadedPayload);
+    return;
+  }
+
   el.innerHTML = `
     <div class="charts-title">Chart of the Day</div>
     <div class="cotd-card">
@@ -2204,6 +2256,12 @@ function maybeFirstVisitForceSonnetRefresh() {
     try { console.log('[first-visit]', JSON.parse(e.data).message); } catch {}
   });
   const finishBanner = () => { try { banner.remove(); } catch {} };
+  es.addEventListener('section', e => {
+    try {
+      const { section, payload, top_today } = JSON.parse(e.data);
+      handleSectionEvent(section, payload, { top_today });
+    } catch (err) { console.warn('[first-visit] section parse failed', err); }
+  });
   es.addEventListener('done', e => {
     try {
       const digest = JSON.parse(e.data);

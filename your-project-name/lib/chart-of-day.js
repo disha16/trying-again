@@ -114,51 +114,93 @@ const CHART_IMG_HOST_RE = /(datawrapper\.dwcdn\.net|cf\.datawrapper\.de|public\.
 const CHART_IMG_HINT_RE = /\b(chart|graph|graphic|figure|trend|infographic|plot|histogram|bar|line|pie|yoy|ytd|cagr|percent|return[s]?|index|spread|yield|cpi|gdp|valuation|earnings)\b/i;
 
 /**
- * Fetch the article HTML and return the URL of an in-body chart image, or null.
- * Looks for: known chart-CDN hosts, chart-named filenames, alt-text hints, and
- * datawrapper/Tableau iframes (in which case we can't easily extract the image
- * URL but we know a chart exists — the function still returns null in that case
- * so caller drops the entry; better to drop than to show a misleading hero shot).
+ * Strip HTML tags and decode common entities to plain text. Used to extract
+ * captionable narrative around a chart image.
  */
-async function findChartImageInArticle(postUrl) {
-  if (!postUrl) return null;
+function _htmlToText(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Fetch the article HTML and return:
+ *   { image: <chart image URL or null>,
+ *     surroundingText: <narrative paragraph(s) near the chart image> }
+ *
+ * `surroundingText` is the article text within ~600 chars before+after the
+ * matched <img> tag, stripped to plain text. Used by the captioner to write
+ * a real description grounded in what the writer said about the chart
+ * (instead of inventing generic 'shows market trends and matters for
+ * investors' filler from the post title alone).
+ *
+ * Returns { image: null, surroundingText: '' } if no chart image is found —
+ * caller should drop the entry rather than fall back to a stock-photo hero.
+ */
+async function findChartContext(postUrl) {
+  if (!postUrl) return { image: null, surroundingText: '' };
   try {
     const resp = await fetch(postUrl, {
       headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml' },
       signal:  AbortSignal.timeout(8000),
       redirect: 'follow',
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) return { image: null, surroundingText: '' };
     const html = await resp.text();
 
-    // Pass 1: <img> whose src matches a known chart CDN.
+    // Find chart-image candidates with their byte-offsets so we can pull
+    // surrounding article text once we choose one.
     const imgRe = /<img\b[^>]+>/gi;
     let m;
-    let bestHint = null;
+    let chosen = null;       // { src, offset }
+    let bestHint = null;     // { src, offset }
     while ((m = imgRe.exec(html)) !== null) {
       const tag = m[0];
+      const offset = m.index;
       const src = (tag.match(/\bsrc=["']([^"']+)["']/i) || [])[1] || '';
       const alt = (tag.match(/\balt=["']([^"']*)["']/i) || [])[1] || '';
       if (!src) continue;
       if (/logo|sprite|avatar|tracking|pixel|favicon/i.test(src)) continue;
       // Strong signal: known chart CDN.
       if (CHART_IMG_HOST_RE.test(src)) {
-        return src.startsWith('//') ? 'https:' + src : src;
+        chosen = { src: src.startsWith('//') ? 'https:' + src : src, offset };
+        break;
       }
       // Medium signal: chart-y alt text or filename.
       if (!bestHint && (CHART_IMG_HINT_RE.test(alt) || CHART_IMG_HINT_RE.test(src))) {
-        bestHint = src.startsWith('//') ? 'https:' + src : src;
+        bestHint = { src: src.startsWith('//') ? 'https:' + src : src, offset };
       }
     }
-    if (bestHint) return bestHint;
+    if (!chosen && bestHint) chosen = bestHint;
+    if (!chosen) return { image: null, surroundingText: '' };
 
-    // Pass 2: chart-bearing iframe (datawrapper/tableau/flourish). We can't
-    // screenshot it cheaply, so report "no extractable chart image" — caller
-    // drops the entry rather than show a hero photo.
-    return null;
+    // Extract a window of HTML around the chosen image (±2000 raw chars,
+    // which after tag stripping yields ~600-1000 chars of text).
+    const winStart = Math.max(0, chosen.offset - 2000);
+    const winEnd   = Math.min(html.length, chosen.offset + 2000);
+    const window   = html.slice(winStart, winEnd);
+    const text     = _htmlToText(window).slice(0, 1200);
+
+    return { image: chosen.src, surroundingText: text };
   } catch {
-    return null;
+    return { image: null, surroundingText: '' };
   }
+}
+
+// Backwards-compat alias used elsewhere in the file.
+async function findChartImageInArticle(postUrl) {
+  const r = await findChartContext(postUrl);
+  return r.image;
 }
 
 // ── RSS parsing ─────────────────────────────────────────────────────────────────────────
@@ -259,12 +301,23 @@ async function scrapeRss(source) {
     //   (c) If body yields nothing, drop the entry entirely — NEVER fall back
     //       to a Substack/Wordpress hero that could be a stock photo.
     let image = null;
+    let articleText = '';
     const rssImageOk = rssImage && !/logo|sprite|avatar|tracking|pixel|favicon/i.test(rssImage);
     if (rssImageOk && (CHART_IMG_HOST_RE.test(rssImage) || CHART_IMG_HINT_RE.test(rssImage))) {
       image = rssImage;
+      // Even when the RSS image is trustworthy, fetch the article body so the
+      // captioner has real material to describe (RSS <description> is usually
+      // a stub for these chart-only feeds).
+      try {
+        const ctx = await findChartContext(link);
+        if (ctx.surroundingText) articleText = ctx.surroundingText;
+      } catch {}
     } else {
-      const chartImg = await findChartImageInArticle(link);
-      if (chartImg) image = chartImg;
+      const ctx = await findChartContext(link);
+      if (ctx.image) {
+        image = ctx.image;
+        articleText = ctx.surroundingText || '';
+      }
     }
 
     if (!image) {
@@ -280,6 +333,7 @@ async function scrapeRss(source) {
       postUrl:   link || source.url,
       postedAt:  pubDate || null,
       context:   desc,
+      articleText,
     });
   }
   return charts;
@@ -525,8 +579,11 @@ async function summarizeCharts(charts, { model } = {}) {
   for (const c of charts) {
     if (c.caption) { out.push(c); continue; }
     try {
-      const sys    = 'You are a concise financial-chart caption writer. Output exactly 2 short sentences (max ~28 words total). No preamble, no markdown, no quotes.';
-      const prompt = `Explain what this chart shows AND why it matters for an investor.\n\nTitle: ${c.title}\nContext: ${c.context || ''}`;
+      const sys = `You are a financial-chart caption writer. Output EXACTLY 2 short sentences, maximum 32 words total.
+Sentence 1: WHAT the chart shows — the specific data series, time range, and at least one concrete number from the article text if available (e.g. '46% vs 39% over 3 years').
+Sentence 2: WHY it matters — the writer's takeaway or the implication for an investor (mechanism, comparison, or signal).
+No preamble. No markdown. No quotes. Do NOT use generic filler like 'shows market trends' or 'matters for informed decisions'.`;
+      const prompt = `Title: ${c.title}\nRSS description: ${c.context || '(none)'}\n\nArticle text near the chart:\n${c.articleText || '(none — article body unavailable)'}\n\nWrite the 2-sentence caption.`;
       const text   = await _callModel(tryModel, prompt, sys);
       const caption = String(text || '').trim().replace(/^["']|["']$/g, '').replace(/\s+/g, ' ');
       out.push({ ...c, caption });

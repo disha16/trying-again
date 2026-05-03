@@ -1007,7 +1007,10 @@ async function runDigestSSE(req, res) {
           } else {
             console.log(`[cron/digest] thought leadership: ${tlCards.length} cards (from last 7d)`);
           }
-          if (tlCards.length) digest.thought_leadership = tlCards;
+          if (tlCards.length) {
+            digest.thought_leadership = tlCards;
+            try { send('section', { section: 'thought_leadership', payload: tlCards }); } catch {}
+          }
         } catch (e) { console.warn('[cron/digest] thought-leadership error:', e.message); }
 
         // Earnings Watch (MarketBeat scrape) — 5 most recent earnings articles,
@@ -1019,6 +1022,7 @@ async function runDigestSSE(req, res) {
             catch (e) { console.warn('[cron/digest] earnings summary error:', e.message); }
             digest.earnings = earnings;
             console.log(`[cron/digest] earnings: ${earnings.length} articles from MarketBeat`);
+            try { send('section', { section: 'earnings', payload: earnings }); } catch {}
           }
         } catch (e) { console.warn('[cron/digest] earnings error:', e.message); }
 
@@ -1046,6 +1050,7 @@ async function runDigestSSE(req, res) {
           angles.buildAnglesForTopStories(digest.top_today, settings.internetFallback, digestModel, entries)
             .then(({ topic_clusters }) => {
               digest.topic_clusters = topic_clusters;
+              try { send('section', { section: 'topic_clusters', payload: topic_clusters, top_today: digest.top_today }); } catch {}
               return storage.setLastRun(digest); // save as soon as deep dives are ready
             })
             .catch(e => console.error('[cron/digest] angles error:', e.message)),
@@ -1077,6 +1082,7 @@ async function runDigestSSE(req, res) {
             try { payload.charts = await chartOfDay.summarizeCharts(payload.charts); } catch (e) { console.warn('[cron/digest] chart caption error:', e.message); }
             digest.chartOfDay = payload;
             console.log(`[cron/digest] chart-of-day v2 cached for ${dateKey} (${payload.charts.length} charts, captioned)`);
+            try { send('section', { section: 'chart_of_day', payload }); } catch {}
           } catch (e) { console.error('[cron/digest] chart-of-day v2 prefetch error:', e.message); }
         } else {
           console.log('[cron/digest] chart-of-day prefetch skipped');

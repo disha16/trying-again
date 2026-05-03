@@ -1,22 +1,20 @@
 'use strict';
 
 /**
- * Newsletter-corpus deep-dive angle generator (v2).
+ * Newsletter-corpus deep-dive angle generator (v3).
  *
- * Replaces the v1 "LLM invents 5 angles from a single excerpt + web snippets"
- * approach, which produced angles that read as paraphrases of the seed
- * headline rather than the genuine perspectives newsletter writers took.
- *
- * v2 design:
- *   1. For each top story, gather ALL newsletter excerpts that cover the topic
- *      (entries[] whose source name appears in cluster.sources[]). Extract the
- *      paragraphs from each entry's bodyText that mention the story's keywords.
- *   2. Build a per-story "corpus": several Newsletter -> excerpt blocks.
- *   3. Ask Haiku to identify 2-5 GENUINELY DISTINCT angles the writers
- *      themselves emphasized — not invented synthesis. Each angle MUST cite
- *      which newsletter (source_badge) said it most strongly.
- *   4. Web search becomes secondary: only used to find clickable URLs and
- *      images for each angle card, never to generate the angle itself.
+ * Design (May 2026):
+ *   - We only generate angles for the top 5 stories, so spend tokens generously.
+ *   - For each story, build a corpus from TWO sources:
+ *       (a) FULL bodyText of every newsletter entry whose source matched the
+ *           story's cluster (capped at 8000 chars/entry).
+ *       (b) Web-article excerpts via Exa-style search with `withContents: true`
+ *           — gets 2-3 article bodies (~3000 chars each).
+ *   - Total per-story corpus can run 15-25k chars; well within Sonnet's 200k.
+ *   - One batched Sonnet call across all 5 stories returns 3-5 angles each,
+ *     EXTRACTED (not invented) from the corpus, with a source_badge per angle.
+ *   - If the corpus is genuinely thin (<500 chars after both passes), we still
+ *     try to return 2 angles based on whatever we have, rather than 0.
  *
  * Output shape per story (mutates story.angles):
  *   [{ headline, description, source_badge, source, sourceUrl, image, ... }]
@@ -27,6 +25,10 @@ const { search, hasRealSearchProvider } = require('./web-search');
 
 const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|einpresswire|prlog/i;
 const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite|encrypted-tbn|gstatic\.com/i;
+
+// Sonnet model id used for deep-dive angle extraction. Override with
+// ANGLES_MODEL env var if a newer Sonnet alias becomes available.
+const SONNET_MODEL = process.env.ANGLES_MODEL || 'claude-sonnet-4-5-20250929';
 
 function isGoodImage(imageUrl, sourceUrl) {
   if (!imageUrl) return false;
@@ -51,13 +53,8 @@ function cleanText(t) {
 
 // ── Corpus building ─────────────────────────────────────────────────────────
 
-/**
- * Derive search keywords from a story. Prefers explicit keywords[] from the
- * cluster; falls back to substantive tokens from the headline (length >= 4,
- * not a stopword).
- */
 const STOPWORDS = new Set([
-  'the','and','for','with','from','that','this','have','will','your','are','was','were','been','their','they','them','what','when','where','which','about','into','than','then','some','more','most','over','said','says','here','there','only','also','just','like','very','much','many','other','these','those','still','being','after','before','because','through','among','should','would','could','might','using','used','make','made','take','taken','goes','give','given','want','need','seem','seen','said','says','plan','plans'
+  'the','and','for','with','from','that','this','have','will','your','are','was','were','been','their','they','them','what','when','where','which','about','into','than','then','some','more','most','over','said','says','here','there','only','also','just','like','very','much','many','other','these','those','still','being','after','before','because','through','among','should','would','could','might','using','used','make','made','take','taken','goes','give','given','want','need','seem','seen','plan','plans'
 ]);
 
 function _storyKeywords(story) {
@@ -68,7 +65,6 @@ function _storyKeywords(story) {
   return tokens.filter(t => t.length >= 4 && !STOPWORDS.has(t)).slice(0, 6);
 }
 
-/** Lowercase, normalised set of source names that covered this story. */
 function _storySourceNames(story) {
   const names = Array.isArray(story.sources)
     ? story.sources
@@ -76,131 +72,166 @@ function _storySourceNames(story) {
   return new Set(names.map(s => String(s).toLowerCase().trim()).filter(Boolean));
 }
 
-/**
- * Pull paragraphs from `bodyText` that contain >=1 keyword. Returns up to
- * `maxChars` worth of relevant content, joining short paragraphs with a blank
- * line between them. If no paragraph matches, returns the leading slice
- * (the email's "headline + opener" usually relates to the lead story).
- */
-function _relevantBodySlice(bodyText, keywords, maxChars = 600) {
-  const text = String(bodyText || '');
+/** Trim newsletter bodyText to remove footer boilerplate / unsubscribe links. */
+function _trimEmailBody(text) {
   if (!text) return '';
-  const paras = text.split(/\n{2,}|\n(?=[A-Z])/).map(p => p.trim()).filter(p => p.length > 40);
-  const kw = keywords.map(k => k.toLowerCase());
-  const matched = [];
-  for (const p of paras) {
-    const lower = p.toLowerCase();
-    if (kw.some(k => lower.includes(k))) {
-      matched.push(p);
-      if (matched.join('\n\n').length >= maxChars) break;
-    }
+  let t = String(text);
+  // Cut at common footer markers.
+  const footers = [
+    /\n[-—=*_]{3,}/,           // ascii rule lines
+    /unsubscribe/i,
+    /you('?| )re receiving/i,
+    /view (this|in) (email|browser)/i,
+    /update your preferences/i,
+    /\n+sent from /i,
+  ];
+  for (const re of footers) {
+    const m = t.search(re);
+    if (m > 200) t = t.slice(0, m);
   }
-  let out = matched.join('\n\n');
-  if (!out) {
-    // Fall back to the email's leading prose (first 2 paragraphs).
-    out = paras.slice(0, 2).join('\n\n');
-  }
-  return out.slice(0, maxChars);
+  return t.trim();
 }
 
 /**
- * Build a corpus of newsletter excerpts about this story.
- * Returns { corpus: string, contributors: [{ source, excerpt }] }
+ * Build per-story corpus. Combines:
+ *   1. Full newsletter bodyText (up to ~8k chars per entry, ~5 entries max)
+ *   2. Web-article content via Exa-style search with `withContents: true`
+ *      (up to 3 articles, ~3k chars each)
  *
- * Each contributor block is one newsletter's relevant passage. Total corpus
- * is capped at ~3000 chars so the LLM call stays fast and cheap.
+ * Returns { corpus: string, contributors: [{ source, kind, excerpt, url? }] }
+ *
+ * `kind` is 'newsletter' or 'web' so the prompt can instruct the LLM on how to
+ * cite (newsletters by name, web by domain).
  */
-function buildCorpus(story, entries) {
-  if (!Array.isArray(entries) || !entries.length) {
-    return { corpus: '', contributors: [] };
-  }
+async function buildCorpus(story, entries, useInternet) {
   const wantedSources = _storySourceNames(story);
   const keywords = _storyKeywords(story);
   const contributors = [];
-  let totalChars = 0;
-  const MAX_TOTAL = 3000;
 
-  // First pass: entries whose source is in cluster.sources[].
-  // Skip if the cluster excerpt is already a substring of the matched passage,
-  // or vice versa, to avoid feeding the LLM near-duplicate text.
-  const clusterExcerptNorm = (story.excerpt || '').replace(/\s+/g, ' ').trim();
-  for (const e of entries) {
-    if (totalChars >= MAX_TOTAL) break;
-    const src = String(e.source || '').toLowerCase().trim();
-    if (!wantedSources.has(src)) continue;
-    const passage = _relevantBodySlice(e.bodyText, keywords, 600);
-    if (!passage || passage.length < 80) continue;
-    if (clusterExcerptNorm) {
-      const passageNorm = passage.replace(/\s+/g, ' ').trim();
-      if (passageNorm.includes(clusterExcerptNorm) || clusterExcerptNorm.includes(passageNorm)) {
-        // Same content as cluster excerpt; the cluster-excerpt path will add it.
-        continue;
-      }
-    }
-    contributors.push({ source: e.source, excerpt: passage });
-    totalChars += passage.length;
-  }
-
-  // Second pass (only if first pass yielded < 2 contributors): ANY entry whose
-  // bodyText mentions multiple keywords. Catches cases where the cluster
-  // sources[] missed a newsletter that actually covered the topic.
-  if (contributors.length < 2 && keywords.length >= 2) {
-    const seen = new Set(contributors.map(c => c.source.toLowerCase()));
+  // ── Pass 1: matching newsletter entries (full body).
+  if (Array.isArray(entries) && entries.length) {
     for (const e of entries) {
-      if (totalChars >= MAX_TOTAL) break;
       const src = String(e.source || '').toLowerCase().trim();
-      if (seen.has(src)) continue;
-      const text = String(e.bodyText || '').toLowerCase();
-      const hits = keywords.filter(k => text.includes(k.toLowerCase())).length;
-      if (hits < 2) continue;
-      const passage = _relevantBodySlice(e.bodyText, keywords, 500);
-      if (!passage || passage.length < 80) continue;
-      contributors.push({ source: e.source, excerpt: passage });
-      totalChars += passage.length;
+      if (!wantedSources.has(src)) continue;
+      const body = _trimEmailBody(e.bodyText);
+      if (!body || body.length < 200) continue;
+      contributors.push({
+        source:  e.source,
+        kind:    'newsletter',
+        excerpt: body.slice(0, 8000),
+      });
       if (contributors.length >= 5) break;
     }
   }
 
-  // Always include the cluster's verbatim excerpt if we have one and it's not
-  // already covered (clusterer.js already picked the most factual passage).
-  if (story.excerpt && story.excerpt.length > 80 && contributors.length < 5) {
+  // ── Pass 2: keyword-matched newsletter entries (catches sources[] gaps).
+  if (Array.isArray(entries) && entries.length && contributors.length < 3 && keywords.length >= 2) {
+    const seen = new Set(contributors.map(c => String(c.source).toLowerCase()));
+    for (const e of entries) {
+      const src = String(e.source || '').toLowerCase().trim();
+      if (seen.has(src)) continue;
+      const body = _trimEmailBody(e.bodyText);
+      if (!body || body.length < 200) continue;
+      const lower = body.toLowerCase();
+      const hits = keywords.filter(k => lower.includes(k.toLowerCase())).length;
+      if (hits < 2) continue;
+      contributors.push({
+        source:  e.source,
+        kind:    'newsletter',
+        excerpt: body.slice(0, 8000),
+      });
+      seen.add(src);
+      if (contributors.length >= 5) break;
+    }
+  }
+
+  // ── Pass 3: include cluster's verbatim excerpt as a small seed if not
+  //    already covered (some stories only have a short excerpt — better than
+  //    nothing for the LLM to anchor on).
+  if (story.excerpt && story.excerpt.length > 100) {
     const ex = story.excerpt.trim();
     const dup = contributors.some(c => c.excerpt.includes(ex.slice(0, 100)));
     if (!dup) {
       const seedSource = (Array.isArray(story.sources) && story.sources[0])
         || story.source
         || 'Newsletter';
-      contributors.unshift({ source: seedSource, excerpt: ex });
+      contributors.unshift({
+        source:  String(seedSource).split(',')[0].trim(),
+        kind:    'newsletter',
+        excerpt: ex,
+      });
+    }
+  }
+
+  // ── Pass 4: web-article content. Always run for top stories — adds breadth
+  //    even when newsletters covered the story, and is the SOLE source for
+  //    web-only stories (no matching newsletter entry).
+  if (useInternet && hasRealSearchProvider()) {
+    try {
+      const query = `${story.headline}`.slice(0, 130);
+      const results = await search(query, {
+        numResults:   3,
+        text:         { maxCharacters: 3500 },
+        withContents: true,
+        category:     'news',
+      });
+      const arr = Array.isArray(results) ? results : [];
+      for (const r of arr.slice(0, 3)) {
+        if (!r.url || BAD_DOMAIN.test(r.url)) continue;
+        const text = cleanText(r.text || r.snippet || '');
+        if (text.length < 200) continue;
+        contributors.push({
+          source:  sourceName(r.url) || 'Web',
+          kind:    'web',
+          excerpt: text.slice(0, 3500),
+          url:     r.url,
+          image:   r.image && isGoodImage(r.image, r.url) ? r.image : null,
+        });
+      }
+    } catch (e) {
+      console.warn(`[angles] web search for "${story.headline.slice(0, 60)}" failed:`, e.message);
     }
   }
 
   const corpus = contributors
-    .map(c => `Newsletter: ${c.source}\n${c.excerpt}`)
+    .map(c => `[${c.kind === 'newsletter' ? 'NEWSLETTER' : 'WEB'}: ${c.source}]\n${c.excerpt}`)
     .join('\n\n----\n\n');
   return { corpus, contributors };
 }
 
 // ── LLM prompt ──────────────────────────────────────────────────────────────
 
-const ANGLES_BATCH_SYSTEM = `You are an analyst preparing the 'Deep Dive' section of a daily intelligence brief. Below each story you will receive a CORPUS — multiple newsletter writers' own words about the story.
+const ANGLES_BATCH_SYSTEM = `You are an analyst preparing the 'Deep Dive' section of a daily intelligence brief. For each top story you receive a CORPUS — a mix of newsletter writers' own words and 1-3 news-article excerpts about the story.
 
-Your job: identify 2 to 5 GENUINELY DISTINCT angles the newsletter writers themselves emphasized in the corpus. EXTRACT — DO NOT INVENT.
+Your job: identify GENUINELY DISTINCT angles that the corpus actually supports. EXTRACT — DO NOT INVENT.
+
+How many angles per story:
+- Aim for 3 to 5 angles per story.
+- If the corpus is genuinely thin (under ~500 chars total), 2 angles is acceptable.
+- 1 angle is a failure case — only return 1 if the corpus contains exactly one substantive claim.
+- Maximum 5.
 
 Hard rules:
-- Use ONLY material in the corpus. Do NOT introduce facts, numbers, names, or claims that are not present in the excerpts.
-- Each angle MUST be tied to a specific newsletter from the corpus (source_badge).
-- If two newsletters made the same point, that's ONE angle, not two — pick the version with the most concrete detail.
-- If the corpus only supports 2 distinct angles, return 2. NEVER pad with paraphrases or generic takes.
-- An angle is "distinct" when it answers a different QUESTION about the story (what happened vs. who wins vs. what comes next vs. the hidden second-order effect).
+- Use ONLY material in the corpus. No outside facts, names, or numbers.
+- Each angle is tied to a SPECIFIC source from the corpus (source_badge).
+- If two sources made the same point, that's ONE angle — pick the version with the most concrete detail (numbers, names, mechanism) and credit that source.
+- An angle is "distinct" when it answers a different QUESTION about the story:
+    * What specifically happened (the new fact).
+    * Who wins / who loses.
+    * The mechanism / why this happened.
+    * The second-order effect / what comes next.
+    * The contrarian read / why the obvious take is wrong.
 
 For each angle:
-- headline: <= 90 chars, declarative, specific. The non-obvious takeaway, not the bare fact. NOT a paraphrase of the parent headline.
-- description: 2 sentences, 140–280 chars total. Sentence 1: the specific fact / claim from the corpus. Sentence 2: the synthesis the writer offered (mechanism, comparison, second-order effect).
-- source_badge: the EXACT newsletter name as it appeared in the corpus (e.g. "The Information", "Stratechery", "Money Stuff").
+- headline: <= 90 chars, declarative, specific. The non-obvious takeaway, not a paraphrase of the parent headline. Lead with a noun + verb + specific.
+- description: 2 sentences, 140–280 chars total.
+    Sentence 1: the specific fact / claim from the corpus (with numbers / names when available).
+    Sentence 2: the synthesis the writer offered (mechanism, comparison, or second-order effect).
+- source_badge: the EXACT source label as it appeared in the corpus header — newsletter name (e.g. "The Information", "Stratechery") OR web domain label (e.g. "Reuters", "Nytimes"). Take it verbatim from the [NEWSLETTER: ...] or [WEB: ...] tag above the excerpt you used.
 
 Voice rules (Sequoia memo / Stratechery long-form):
 - Declarative, fact-dense, names + figures.
-- Forbidden words: 'game-changer', 'revolutionary', 'stunning', 'shocking', 'epic', 'dramatic', 'massive', 'unprecedented' (unless literally true), 'watershed', 'sea change', 'paradigm shift', 'this could prove', 'only time will tell', 'quiet', 'hard to miss'.
+- Forbidden words / phrases: 'game-changer', 'revolutionary', 'stunning', 'shocking', 'epic', 'dramatic', 'massive', 'unprecedented' (unless literally true), 'watershed', 'sea change', 'paradigm shift', 'this could prove', 'only time will tell', 'quiet', 'hard to miss', 'looms', 'in the making', 'pivotal moment'.
 
 Return ONLY valid JSON — no markdown, no preamble:
 {
@@ -210,14 +241,14 @@ Return ONLY valid JSON — no markdown, no preamble:
       "angles": [
         { "headline": "...", "description": "...", "source_badge": "..." }
       ]
-    },
-    ...
+    }
   ]
 }
 
 Critical:
 - One entry per input story, in input order. story_index matches input position.
-- If a story has NO usable corpus, return an empty angles array — do not invent content.`;
+- Aim for 3-5 angles per story. Returning fewer than 3 means the corpus genuinely doesn't support more — but check carefully before settling for 1-2.
+- If a story has NO usable corpus (truly empty), return an empty angles array.`;
 
 function _buildBatchPrompt(stories, corpusByIndex) {
   const blocks = stories.map((s, i) => {
@@ -225,9 +256,9 @@ function _buildBatchPrompt(stories, corpusByIndex) {
     return `[STORY ${i}] ${s.headline}
 
 CORPUS:
-${corpus || '(no newsletter corpus available)'}`;
+${corpus || '(no corpus available)'}`;
   }).join('\n\n==========\n\n');
-  return `Identify 2–5 distinct angles from the corpus for each of the following ${stories.length} stories. Return JSON per the schema.\n\n${blocks}`;
+  return `Identify 3-5 distinct angles from each story's corpus. Return JSON per the schema.\n\n${blocks}`;
 }
 
 function _parseBatchResponse(raw, storiesLen) {
@@ -255,25 +286,32 @@ function _parseBatchResponse(raw, storiesLen) {
   return out;
 }
 
-// ── Per-angle URL + image attachment (web search is secondary) ──────────────
+// ── Per-angle URL + image attachment ────────────────────────────────────────
 
 /**
- * For an angle whose source_badge is a known newsletter, attach a clickable URL
- * + image. Strategy:
- *   1. If we have a parent cluster URL whose host matches the badge, use that.
- *   2. Otherwise fire a small web search for `${badge} ${angle.headline}` to
- *      find the badge's article on this story.
- *   3. Fall back to undraw illustration if both fail.
+ * Find a clickable URL + image for an angle.
+ *   1. If the angle's source_badge matches a contributor we already fetched
+ *      (e.g. via Pass 4 web search), reuse that contributor's url + image.
+ *   2. Otherwise fire a small web search for the badge + headline.
+ *   3. Fall back to parent URL or undraw illustration.
  */
-async function _findArticleForAngle(angleHeadline, badge, parentSrc, parentUrl, useInternet) {
-  // 1) parent URL when badge matches
+async function _findArticleForAngle(angleHeadline, badge, parentSrc, parentUrl, useInternet, contributors = []) {
+  // 1) reuse contributor URL when badge matches
+  if (badge && contributors.length) {
+    const lc = badge.toLowerCase();
+    const match = contributors.find(c => c.url && String(c.source).toLowerCase().includes(lc.split(/\s+/)[0]));
+    if (match) {
+      return { url: match.url, source: match.source, image: match.image || null, snippet: '' };
+    }
+  }
+
+  // 2) parent URL when badge matches parent source
   if (parentUrl && badge && parentSrc &&
       parentSrc.toLowerCase().includes(badge.toLowerCase().split(/\s+/)[0])) {
     return { url: parentUrl, source: parentSrc, image: null, snippet: '' };
   }
 
   if (!useInternet || !hasRealSearchProvider()) {
-    // Without web search, return parent URL as a last resort.
     if (parentUrl) return { url: parentUrl, source: parentSrc || badge, image: null, snippet: '' };
     return null;
   }
@@ -304,13 +342,13 @@ async function _findArticleForAngle(angleHeadline, badge, parentSrc, parentUrl, 
   }
 }
 
-async function _attachSourcesAndImages(story, angles, useInternet) {
+async function _attachSourcesAndImages(story, angles, useInternet, contributors) {
   const parentSrc = (story.source || '').split(',')[0].trim();
   const parentUrl = story.sourceUrl || story.url || '';
 
   const enriched = await Promise.all(angles.map(async a => {
     const badge = a.source_badge || parentSrc;
-    const found = await _findArticleForAngle(a.headline, badge, parentSrc, parentUrl, useInternet);
+    const found = await _findArticleForAngle(a.headline, badge, parentSrc, parentUrl, useInternet, contributors);
     return {
       headline:       a.headline,
       description:    a.description,
@@ -325,12 +363,12 @@ async function _attachSourcesAndImages(story, angles, useInternet) {
   return enriched;
 }
 
-// ── Fallback synthesis when LLM fails completely ────────────────────────────
+// ── Fallback synthesis when LLM returns empty ───────────────────────────────
 
 function _fallbackAngles(story, contributors) {
   const out = [];
   for (const c of contributors.slice(0, 3)) {
-    const firstSentence = (c.excerpt.match(/^[^.!?]{20,260}[.!?]/)?.[0] || c.excerpt.slice(0, 200)).trim();
+    const firstSentence = (String(c.excerpt).match(/^[^.!?]{20,260}[.!?]/)?.[0] || c.excerpt.slice(0, 200)).trim();
     out.push({
       headline:     `${c.source}'s read on ${story.headline.split(/[,—–:]/)[0].trim().slice(0, 60)}`.slice(0, 110),
       description:  firstSentence.slice(0, 280),
@@ -345,57 +383,63 @@ function _fallbackAngles(story, contributors) {
 /**
  * @param {Array}   stories      digest.top_today
  * @param {boolean} useInternet  settings.internetFallback
- * @param {string}  model        digestModel (Haiku is fine; corpus extraction is light)
+ * @param {string}  model        digestModel (IGNORED — angles always uses Sonnet)
  * @param {Array}   entries      raw newsletter entries (each: { source, bodyText, ... })
  */
 async function buildAnglesForTopStories(stories, useInternet, model, entries = []) {
   if (!Array.isArray(stories) || !stories.length) return { topic_clusters: [] };
   const top = stories.slice(0, 5);
 
-  // 1) Build per-story newsletter corpus.
-  const corpusByIndex = top.map((s, i) => {
-    const { corpus, contributors } = buildCorpus(s, entries);
-    console.log(`[angles] story ${i} "${(s.headline || '').slice(0, 60)}" — corpus: ${corpus.length}c | contributors: ${contributors.length} (${contributors.map(c => c.source).join(', ')})`);
-    return { corpus, contributors };
-  });
+  // 1) Build per-story corpus (newsletter + web). Run in parallel.
+  const corpusByIndex = await Promise.all(top.map(async (s, i) => {
+    const result = await buildCorpus(s, entries, useInternet);
+    const nlCount = result.contributors.filter(c => c.kind === 'newsletter').length;
+    const webCount = result.contributors.filter(c => c.kind === 'web').length;
+    console.log(`[angles] story ${i} "${(s.headline || '').slice(0, 60)}" — corpus: ${result.corpus.length}c | nl=${nlCount} web=${webCount}`);
+    return result;
+  }));
 
-  // 2) ONE batched LLM call. Haiku is sufficient — task is extractive, not generative.
+  // 2) ONE batched Sonnet call for all 5 stories.
   let parsed = null;
   try {
     const prompt = _buildBatchPrompt(top, corpusByIndex);
-    const raw    = await _callModel(model, prompt, ANGLES_BATCH_SYSTEM);
+    console.log(`[angles] calling ${SONNET_MODEL} with batched prompt (${prompt.length}c across ${top.length} stories)`);
+    const raw    = await _callModel(SONNET_MODEL, prompt, ANGLES_BATCH_SYSTEM);
     parsed = _parseBatchResponse(raw, top.length);
-    if (!parsed) console.warn('[angles] batched LLM call returned no parseable JSON. Raw head:', (raw || '').slice(0, 200));
+    if (!parsed) console.warn('[angles] batched LLM call returned no parseable JSON. Raw head:', (raw || '').slice(0, 300));
   } catch (e) {
     console.warn('[angles] batched LLM call failed:', e.message);
   }
 
-  // 3) For any story whose LLM angles are empty, fall back to deterministic
-  //    extraction from contributors. Ensures every cluster gets at least
-  //    one card (rather than a blank slot).
+  // 3) For each story, attach URLs/images. Use _fallbackAngles only if LLM
+  //    returned nothing AND we have at least one contributor.
   const finalAngles = await Promise.all(top.map(async (s, i) => {
     const llmAngles = parsed?.[i] || [];
+    const contributors = corpusByIndex[i].contributors;
     const angles = llmAngles.length
       ? llmAngles
-      : _fallbackAngles(s, corpusByIndex[i].contributors);
-    return _attachSourcesAndImages(s, angles, useInternet);
+      : (contributors.length ? _fallbackAngles(s, contributors) : []);
+    if (!angles.length) return [];
+    return _attachSourcesAndImages(s, angles, useInternet, contributors);
   }));
 
-  // 4) Mutate each top story + build topic_clusters[] for UI compatibility.
+  // 4) Mutate each top story + build topic_clusters[] for UI.
   const topic_clusters = top.map((s, i) => {
     const angles = finalAngles[i];
     s.angles = angles;
+    const firstNewsletterContrib = corpusByIndex[i].contributors.find(c => c.kind === 'newsletter');
     return {
       topic:   s.headline,
-      summary: corpusByIndex[i].contributors[0]?.excerpt?.split('\n\n')[0]?.slice(0, 280) || '',
+      summary: (firstNewsletterContrib?.excerpt || corpusByIndex[i].contributors[0]?.excerpt || '')
+                 .split(/\n\n/)[0]
+                 .slice(0, 280),
       image:   (s.image && !BAD_IMAGE.test(s.image) ? s.image : null)
                || require('./undraw').pick(s.headline),
       stories: angles,
     };
   }).filter(c => c.stories && c.stories.length > 0);
 
-  // 5) Image upgrade: OG-scrape parent + per-angle search hosts, then Serper
-  //    Images for anything still on undraw. Same cascade as before.
+  // 5) Image upgrade: OG-scrape + Serper Images cascade for any undraw fallbacks.
   try {
     const { attachOgImages } = require('./og-image');
     const { findImage } = require('./image-fallback');
@@ -429,7 +473,7 @@ async function buildAnglesForTopStories(stories, useInternet, model, entries = [
     console.warn('[angles] og/serper image attach failed:', e.message);
   }
 
-  console.log(`[angles] produced ${topic_clusters.length} deep-dive clusters with ${finalAngles.reduce((n, a) => n + a.length, 0)} total angles (corpus-grounded)`);
+  console.log(`[angles] produced ${topic_clusters.length} deep-dive clusters with ${finalAngles.reduce((n, a) => n + a.length, 0)} total angles (corpus-grounded, sonnet)`);
   return { topic_clusters };
 }
 
