@@ -814,25 +814,44 @@ $('#tab-digest').addEventListener('click', e => {
   if (btn) renderCategory(btn.dataset.cat);
 });
 
-/* ── Refresh button (reload cache from server) ── */
+/* ── Refresh button (reload cache from server) ──
+   While a refresh is in flight we keep the cached digest visible and only
+   show a thin sticky banner at the top with the current step + a spinner.
+   On `done` the cached content swaps in-place; the banner stays through
+   background enrichment and dismisses on `enriched` or error. */
 $('#refreshBtn').addEventListener('click', () => {
   const btn = $('#refreshBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Generating…';
 
-  // Overlay breathing animation over digest area without destroying inner DOM
   const digestArea = $('#digestArea');
-  digestArea.classList.add('hidden'); // hide content but keep DOM intact
-  const breathOverlay = document.createElement('div');
-  breathOverlay.id = 'breathStatus';
-  breathOverlay.className = 'breath-status-wrap';
-  digestArea.parentNode.insertBefore(breathOverlay, digestArea);
-  showBreathing(breathOverlay);
+  // Inject thin sticky refresh banner ABOVE the digest area
+  const banner = document.createElement('div');
+  banner.id = 'refreshBanner';
+  banner.className = 'refresh-banner';
+  banner.innerHTML = `
+    <span class="refresh-banner-spinner"></span>
+    <span class="refresh-banner-label" id="refreshBannerLabel">Starting refresh…</span>
+    <span class="refresh-banner-msg" id="refreshBannerMsg">${BREATH_MESSAGES[0]}</span>
+  `;
+  digestArea.parentNode.insertBefore(banner, digestArea);
 
-  function restoreDigest() {
-    stopBreathing();
-    breathOverlay.remove();
-    digestArea.classList.remove('hidden');
+  // Rotate flavour message every 8s while banner is up
+  let _bannerMi = 0;
+  const bannerMsgTimer = setInterval(() => {
+    _bannerMi = (_bannerMi + 1) % BREATH_MESSAGES.length;
+    const el = $('#refreshBannerMsg');
+    if (el) { el.style.opacity = 0; setTimeout(() => { el.textContent = BREATH_MESSAGES[_bannerMi]; el.style.opacity = 1; }, 250); }
+  }, 8000);
+
+  function setBannerLabel(text) {
+    const el = $('#refreshBannerLabel');
+    if (el) el.textContent = text;
+  }
+
+  function removeBanner() {
+    clearInterval(bannerMsgTimer);
+    if (banner.parentNode) banner.parentNode.removeChild(banner);
   }
 
   // EventSource can't send headers; pass secret as query param
@@ -841,24 +860,18 @@ $('#refreshBtn').addEventListener('click', () => {
 
   es.addEventListener('status', e => {
     const { message } = JSON.parse(e.data);
-    setBreathLabel(message);
+    setBannerLabel(message);
   });
 
   es.addEventListener('done', e => {
-    restoreDigest();
     const digest = JSON.parse(e.data);
     enrichDigestWithClusters(digest);
     renderDigest(digest);
-    // Note: do NOT call loadChartsOfDay() here — it triggers a separate fetch
-    // to /api/chart-of-day that races the SSE 'section:chart_of_day' event.
-    // The skeleton from renderDigest → loadChartsOfDay (called by renderCategory
-    // when cat=top_today) handles the in-between state; the section event will
-    // swap in real content as soon as it's ready.
     loadDateRolodex();
-    showStatus('Digest updated — enriching sections in background…', 'success');
+    setBannerLabel('Refreshed. Enriching deep dives, charts, and TL…');
     btn.disabled = false;
     btn.textContent = '↻ Refresh';
-    // Keep the connection open so we can stream per-section enrichment events.
+    // Keep the banner up while enrichment streams in via 'section' events.
   });
 
   es.addEventListener('section', e => {
@@ -873,17 +886,15 @@ $('#refreshBtn').addEventListener('click', () => {
       const digest = JSON.parse(e.data);
       enrichDigestWithClusters(digest);
       renderDigest(digest);
-      // No explicit loadChartsOfDay() — each section was already streamed.
-      showStatus('Deep dives, chart of day, and thought leadership ready!', 'success');
-      setTimeout(hideStatus, 3000);
     } catch (err) { console.warn('enriched handler:', err); }
+    removeBanner();
     es.close();
   });
 
   let gotServerError = false;
   es.addEventListener('error', e => {
     gotServerError = true;
-    restoreDigest();
+    removeBanner();
     try {
       const { error } = JSON.parse(e.data);
       showStatus(error || 'Something went wrong', 'error');
@@ -897,7 +908,7 @@ $('#refreshBtn').addEventListener('click', () => {
 
   es.onerror = () => {
     if (gotServerError) return;
-    restoreDigest();
+    removeBanner();
     es.close();
     btn.disabled = false;
     btn.textContent = '↻ Refresh';

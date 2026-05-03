@@ -682,12 +682,24 @@ code {
   box-shadow: 0 8px 28px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
 }
 .mini-card.mini-active:active { cursor: grabbing; }
-.mini-inner { padding: 0; display: flex; flex-direction: column; }
-.mini-img {
-  width: 100%; height: 200px; object-fit: cover;
-  border-radius: 14px 14px 0 0; display: block;
+.mini-inner {
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
 }
-.mini-card .mini-body { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
+.mini-img {
+  width: 56px; height: 56px;
+  flex: 0 0 56px;
+  object-fit: contain;
+  background: var(--surface-2, rgba(255,255,255,0.03));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  display: block;
+}
+.mini-card .mini-body { flex: 1 1 auto; min-width: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .mini-headline { font-size: 1.02rem; font-weight: 700; line-height: 1.4; letter-spacing: -.01em; color: var(--text); }
 .mini-desc { font-size: .85rem; color: var(--muted-2); line-height: 1.6; }
 .mini-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); }

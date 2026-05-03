@@ -505,41 +505,12 @@ async function buildAnglesForTopStories(stories, useInternet, model, entries = [
     };
   }).filter(c => c.stories && c.stories.length > 0);
 
-  // 5) Image upgrade: OG-scrape + Serper Images cascade for any undraw fallbacks.
-  try {
-    const { attachOgImages } = require('./og-image');
-    const { findImage } = require('./image-fallback');
+  // 5) Image-hunt step removed (was OG-scrape + Serper Images cascade).
+  //    Angle cards now use small icon-style undraw illustrations or contributor
+  //    images already gathered in Pass 4 — no further HTTP work needed. This
+  //    saves ~15-20s of tail latency on the topic_clusters event.
 
-    topic_clusters.forEach((c, idx) => {
-      if (!c.sourceUrl) c.sourceUrl = top[idx].sourceUrl || top[idx].url || '';
-    });
-
-    const allTargets = [
-      ...topic_clusters,
-      ...topic_clusters.flatMap(c => c.stories),
-    ];
-
-    await attachOgImages(allTargets, { concurrency: 10 });
-
-    const stillNeed = allTargets.filter(it => {
-      const im = it.image || '';
-      return !im || /cdn\.jsdelivr\.net\/gh\/balazser\/undraw/i.test(im) || BAD_IMAGE.test(im);
-    });
-    const SERPER_CAP = 25;
-    const slice = stillNeed.slice(0, SERPER_CAP);
-    await Promise.all(slice.map(async it => {
-      const headline = it.title || it.topic || it.headline || '';
-      if (!headline) return;
-      try {
-        const img = await findImage(headline);
-        if (img) it.image = img;
-      } catch { /* ignore */ }
-    }));
-  } catch (e) {
-    console.warn('[angles] og/serper image attach failed:', e.message);
-  }
-
-  console.log(`[angles] produced ${topic_clusters.length} deep-dive clusters with ${finalAngles.reduce((n, a) => n + a.length, 0)} total angles (corpus-grounded, sonnet)`);
+  console.log(`[angles] produced ${topic_clusters.length} deep-dive clusters with ${finalAngles.reduce((n, a) => n + a.length, 0)} total angles (corpus-grounded, sonnet, no image-hunt)`);
   return { topic_clusters };
 }
 
