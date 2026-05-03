@@ -103,11 +103,15 @@ async function getChartSources() {
 // ── Article-body chart verification ──────────────────────────────────────────────
 
 // Image hosts/paths that strongly indicate a real data visualization. Used to
-// confirm a general-news article (NYT etc.) actually contains a chart before
-// we promote it as Chart of the Day.
+// confirm an article actually contains a chart before we promote it as Chart of
+// the Day. NOTE: substackcdn.com is intentionally NOT here — both charts and
+// stock photos are served from the same path on substack, so we cannot use
+// the host alone to distinguish them. We rely on alt-text/filename hints
+// (CHART_IMG_HINT_RE) for substack-hosted images.
 const CHART_IMG_HOST_RE = /(datawrapper\.dwcdn\.net|cf\.datawrapper\.de|public\.tableau\.com|chartblocks|highcharts|infogram|flourish\.studio|g\.foolcdn\.com\/.*\/chart|static01\.nyt\.com\/[^"']*?(?:graphic|chart|svg))/i;
 // Alt-text or filename hints that a given <img> is a chart/graph/figure.
-const CHART_IMG_HINT_RE = /\b(chart|graph|graphic|figure|trend|infographic|plot|histogram|bar|line|pie)\b/i;
+// Includes data words common in chart alt text (yoy, ytd, percent, returns).
+const CHART_IMG_HINT_RE = /\b(chart|graph|graphic|figure|trend|infographic|plot|histogram|bar|line|pie|yoy|ytd|cagr|percent|return[s]?|index|spread|yield|cpi|gdp|valuation|earnings)\b/i;
 
 /**
  * Fetch the article HTML and return the URL of an in-body chart image, or null.
@@ -227,10 +231,12 @@ async function scrapeRss(source) {
 
   const chartFirst = source.chartFirst !== false; // default true for back-compat
 
-  // Items / entries. For chartFirst sources we stop at the first usable item;
-  // for general feeds we may scan up to N items, dropping non-chart ones.
+  // Even on chart-dedicated feeds (Klement, Bilello, Apricitas) some posts
+  // lack an actual chart image (life updates, op-eds, photo essays). We
+  // validate every entry has a chart-like image before promoting it — a
+  // stock-photo hero (e.g. hot-air balloon) is worse than no chart at all.
   const itemRe   = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
-  const maxScan  = chartFirst ? 5 : 10;  // scan further on general feeds to find one that has a chart
+  const maxScan  = 10;
   const charts   = [];
   let scanned    = 0;
   let m;
@@ -238,8 +244,6 @@ async function scrapeRss(source) {
     scanned++;
     const block = m[1] || m[2] || '';
     const rssImage = extractImage(block);
-    if (chartFirst && !rssImage) continue;
-    if (chartFirst && /logo|sprite|avatar|tracking|pixel|favicon/i.test(rssImage)) continue;
 
     const title   = stripTags(block.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || 'Chart').slice(0, 140);
     const link    = stripTags(block.match(/<link[^>]*>([\s\S]*?)<\/link>/i)?.[1] || '')
@@ -248,18 +252,24 @@ async function scrapeRss(source) {
     const pubDate = stripTags(block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1]
                            || block.match(/<published>([\s\S]*?)<\/published>/i)?.[1] || '');
 
-    let image = rssImage;
-
-    // For general-purpose feeds: verify the article actually contains a chart.
-    // The RSS hero is almost always a stock photo — if no in-body chart image
-    // is found, drop this entry rather than ship a misleading photo.
-    if (!chartFirst) {
+    // Decide on the image. Order of trust:
+    //   (a) RSS hero is on a known chart CDN OR has chart-hinting filename/path
+    //       → trust it without fetching the article.
+    //   (b) Otherwise scan article body for a chart image.
+    //   (c) If body yields nothing, drop the entry entirely — NEVER fall back
+    //       to a Substack/Wordpress hero that could be a stock photo.
+    let image = null;
+    const rssImageOk = rssImage && !/logo|sprite|avatar|tracking|pixel|favicon/i.test(rssImage);
+    if (rssImageOk && (CHART_IMG_HOST_RE.test(rssImage) || CHART_IMG_HINT_RE.test(rssImage))) {
+      image = rssImage;
+    } else {
       const chartImg = await findChartImageInArticle(link);
-      if (!chartImg) {
-        console.log(`[chart] ${source.name}: "${title.slice(0, 60)}" — no chart in body, skipping`);
-        continue;
-      }
-      image = chartImg;
+      if (chartImg) image = chartImg;
+    }
+
+    if (!image) {
+      console.log(`[chart] ${source.name}: "${title.slice(0, 60)}" — no chart image found, dropping`);
+      continue;
     }
 
     charts.push({
