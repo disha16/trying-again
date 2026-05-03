@@ -312,6 +312,7 @@ function renderThoughtLeadership(cards) {
           </div>
         </div>
       </div>`;
+    schedulePollForSection('thought_leadership');
     return;
   }
   __tlCards = cards;
@@ -664,13 +665,15 @@ function renderTopicClusters(clusters) {
   // not yet ready (deep dives stream in after the initial digest payload).
   el.classList.remove('hidden');
   if (!clusters?.length) {
+    const widths = ['72%', '58%', '83%', '46%', '67%'];
     el.innerHTML = `<div class="tc-title">Deep Dives</div>` +
-      Array.from({ length: 5 }, () => `
+      widths.map(w => `
         <div class="tc-row tc-skeleton">
           <div class="tc-header">
-            <span class="tc-name skeleton-line" style="width:60%">&nbsp;</span>
+            <span class="tc-name skeleton-line" style="width:${w}">&nbsp;</span>
           </div>
         </div>`).join('');
+    schedulePollForSection('topic_clusters');
     return;
   }
   clusterState.clear();
@@ -1092,6 +1095,46 @@ document.addEventListener('click', e => {
 setTimeout(loadCacheIndex, 800);
 
 
+
+/* ── Section-polling fallback for stale cache ──
+   When a page reload finds a section empty (e.g. an in-flight refresh
+   has not yet persisted topic_clusters / TL / chart_of_day to cache),
+   poll /last-run a few times so the section fills in without requiring
+   another manual refresh. */
+const __sectionPolls = new Map();
+function schedulePollForSection(name) {
+  if (__sectionPolls.has(name)) return;
+  // Stop early if the digest is older than 10 minutes — that means the run
+  // already completed and the section is genuinely empty (no point polling).
+  const ageMs = digestData?.ranAt ? (Date.now() - new Date(digestData.ranAt).getTime()) : 0;
+  if (ageMs > 10 * 60 * 1000) return;
+  const POLLS = [5000, 10000, 15000, 20000, 25000];
+  let i = 0;
+  const tick = async () => {
+    if (currentCat !== 'top_today') { __sectionPolls.delete(name); return; }
+    try {
+      const data = await fetch('/last-run').then(r => r.json()).catch(() => null);
+      if (!data) throw new Error('no-data');
+      let payload = null;
+      if (name === 'topic_clusters' && Array.isArray(data.topic_clusters) && data.topic_clusters.length) payload = data.topic_clusters;
+      if (name === 'thought_leadership' && Array.isArray(data.thought_leadership) && data.thought_leadership.length) payload = data.thought_leadership;
+      if (name === 'chart_of_day' && data.chartOfDay && Array.isArray(data.chartOfDay.charts) && data.chartOfDay.charts.length) payload = data.chartOfDay;
+      if (payload) {
+        if (name === 'topic_clusters') { digestData.topic_clusters = payload; renderTopicClusters(payload); }
+        else if (name === 'thought_leadership') { digestData.thought_leadership = payload; renderThoughtLeadership(payload); }
+        else if (name === 'chart_of_day') { digestData.chartOfDay = payload; loadChartsOfDay(payload); }
+        __sectionPolls.delete(name);
+        return;
+      }
+    } catch {}
+    if (i < POLLS.length) {
+      __sectionPolls.set(name, setTimeout(tick, POLLS[i++]));
+    } else {
+      __sectionPolls.delete(name);
+    }
+  };
+  __sectionPolls.set(name, setTimeout(tick, POLLS[i++]));
+}
 
 /* ── Load last run on startup ── */
 async function loadLastRun() {
