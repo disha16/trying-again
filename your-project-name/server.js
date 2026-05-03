@@ -1026,20 +1026,45 @@ async function runDigestSSE(req, res) {
           }
         } catch (e) { console.warn('[cron/digest] earnings error:', e.message); }
 
-        // Bridge: enrich top_today items with the matching cluster's excerpt + sources
-        // so angles.js can use newsletter material first and skip web search when possible.
+        // Bridge: enrich top_today items with the matching cluster's excerpt +
+        // sources + keywords so angles.js can use newsletter material first.
+        // Editor may rewrite headlines, so we use a two-pass match: exact
+        // headline first, then keyword-overlap (>= 2 shared keywords) as fallback.
         try {
           const clusterByHeadline = new Map();
+          const STOP = new Set(['the','and','for','with','from','that','this','have','will','your','are','was','were','been','their','they','them','what','when','where','which','about','into','than','then','some','more','most','over','said','says','here','there','only','also','just','like','very','much','many','other','these','those','still','being','after','before','because','through','among','should','would','could','might','using','used','make','made','take','taken','said','says']);
+          const tokenize = h => (h || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+          const significant = h => tokenize(h).filter(t => t.length >= 4 && !STOP.has(t));
           for (const c of clusters || []) {
             const k = (c.headline || '').toLowerCase().trim();
             if (k) clusterByHeadline.set(k, c);
           }
+          const usedClusters = new Set();
           for (const item of (digest.top_today || [])) {
             const k = (item.headline || '').toLowerCase().trim();
-            const c = clusterByHeadline.get(k);
+            // Pass 1: exact headline match.
+            let c = clusterByHeadline.get(k);
+            // Pass 2: keyword overlap (>=2 distinct significant tokens shared).
+            if (!c) {
+              const itemTokens = new Set(significant(item.headline));
+              if (itemTokens.size >= 2) {
+                let bestOverlap = 0;
+                let bestCluster = null;
+                for (const cc of (clusters || [])) {
+                  if (usedClusters.has(cc)) continue;
+                  const cTokens = new Set(significant(cc.headline));
+                  let overlap = 0;
+                  for (const t of itemTokens) if (cTokens.has(t)) overlap++;
+                  if (overlap > bestOverlap) { bestOverlap = overlap; bestCluster = cc; }
+                }
+                if (bestOverlap >= 2) c = bestCluster;
+              }
+            }
             if (!c) continue;
+            usedClusters.add(c);
             if (c.excerpt && !item.excerpt) item.excerpt = c.excerpt;
             if (Array.isArray(c.sources) && !item.sources) item.sources = c.sources;
+            if (Array.isArray(c.keywords) && !item.keywords) item.keywords = c.keywords;
           }
         } catch (e) { console.warn('[cron/digest] excerpt bridge warn:', e.message); }
 

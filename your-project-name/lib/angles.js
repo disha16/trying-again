@@ -51,6 +51,59 @@ function cleanText(t) {
     .trim();
 }
 
+/**
+ * Strip HTML to plain text — keep only paragraph-y content.
+ * Removes scripts/styles/nav/footer/header before tag stripping.
+ */
+function _htmlToText(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
+    .replace(/<form[\s\S]*?<\/form>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Fetch an article URL and return ~3000 chars of plain text body. Used when
+ * the search provider's returned snippet is too short to serve as corpus.
+ */
+async function _fetchArticleText(url) {
+  if (!url) return '';
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NewsletterDigest/1.0; +https://newsletter-digest-psi.vercel.app)',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      signal:   AbortSignal.timeout(7000),
+      redirect: 'follow',
+    });
+    if (!resp.ok) return '';
+    const html = await resp.text();
+    // Prefer the largest <article> or <main> block when present, otherwise
+    // strip the whole document.
+    const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+    const mainMatch    = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+    const block = (articleMatch && articleMatch[1]) || (mainMatch && mainMatch[1]) || html;
+    return _htmlToText(block).slice(0, 4000);
+  } catch {
+    return '';
+  }
+}
+
 // ── Corpus building ─────────────────────────────────────────────────────────
 
 const STOPWORDS = new Set([
@@ -166,6 +219,11 @@ async function buildCorpus(story, entries, useInternet) {
   // ── Pass 4: web-article content. Always run for top stories — adds breadth
   //    even when newsletters covered the story, and is the SOLE source for
   //    web-only stories (no matching newsletter entry).
+  //
+  //    Provider notes: Exa supports withContents (full article text). When the
+  //    user has Exa disabled (useExa=false), the chain falls through to GDELT
+  //    which returns short snippets (<200 chars). For those we follow up with
+  //    a direct HTTP fetch to the article URL to get a real corpus.
   if (useInternet && hasRealSearchProvider()) {
     try {
       const query = `${story.headline}`.slice(0, 130);
@@ -176,10 +234,29 @@ async function buildCorpus(story, entries, useInternet) {
         category:     'news',
       });
       const arr = Array.isArray(results) ? results : [];
-      for (const r of arr.slice(0, 3)) {
-        if (!r.url || BAD_DOMAIN.test(r.url)) continue;
-        const text = cleanText(r.text || r.snippet || '');
-        if (text.length < 200) continue;
+      const candidates = arr.slice(0, 3).filter(r => r.url && !BAD_DOMAIN.test(r.url));
+
+      // Fetch full article body for any candidate whose returned text is too
+      // short to be useful (typical for GDELT/Tavily snippets).
+      await Promise.all(candidates.map(async r => {
+        const initialText = cleanText(r.text || r.snippet || '');
+        if (initialText.length >= 800) {
+          r._fullText = initialText;
+          return;
+        }
+        try {
+          const fetched = await _fetchArticleText(r.url);
+          // Prefer fetched body if it's substantially longer than the snippet,
+          // otherwise fall back to whatever the search provider returned.
+          r._fullText = fetched && fetched.length > initialText.length ? fetched : initialText;
+        } catch {
+          r._fullText = initialText;
+        }
+      }));
+
+      for (const r of candidates) {
+        const text = r._fullText || '';
+        if (text.length < 80) continue;  // truly empty: skip
         contributors.push({
           source:  sourceName(r.url) || 'Web',
           kind:    'web',
