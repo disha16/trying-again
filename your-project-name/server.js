@@ -1043,7 +1043,7 @@ async function runDigestSSE(req, res) {
         // angles.js prefers cluster excerpts (no web call) and only falls back to web search
         // when source material is thin. Replaces the old topicClusters.buildTopicClusters call.
         const [clusters_result] = await Promise.all([
-          angles.buildAnglesForTopStories(digest.top_today, settings.internetFallback, digestModel)
+          angles.buildAnglesForTopStories(digest.top_today, settings.internetFallback, digestModel, entries)
             .then(({ topic_clusters }) => {
               digest.topic_clusters = topic_clusters;
               return storage.setLastRun(digest); // save as soon as deep dives are ready
