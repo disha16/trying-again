@@ -92,22 +92,31 @@ Critical:
 - Do NOT contradict the newsletter excerpt; do NOT invent numbers or quotes.
 - If a story's source material genuinely cannot support 5 distinct dimensions, return fewer angles for that one (never duplicate dimensions).`;
 
+/**
+ * Decide whether to skip web search for a story.
+ *
+ * Previously this skipped any story with a >=250-char newsletter excerpt + 3 sources,
+ * which optimised cost but produced angle cards where every angle attributed to
+ * the seed publisher (e.g., 5 angles all labelled "The Information") with empty
+ * sourceUrls. We now skip ONLY when the cluster is overwhelmingly self-sufficient
+ * (>= 600 chars excerpt) AND has >=4 sources — most clusters will go through web
+ * search, giving us per-angle publisher diversity and clickable links.
+ */
 function _shouldSkipWebSearch(story) {
   const excerpt = (story.excerpt || '').trim();
   const numSources = Array.isArray(story.sources)
     ? story.sources.length
     : (typeof story.source === 'string' ? story.source.split(',').filter(Boolean).length : 1);
-  // Self-sufficient: rich excerpt + plural sources, OR very rich excerpt alone.
-  if (excerpt.length >= 450) return true;
-  if (excerpt.length >= 250 && numSources >= 3) return true;
-  return false;
+  return excerpt.length >= 600 && numSources >= 4;
 }
 
 async function _gatherWebContext(story, useInternet) {
   if (!useInternet || !hasRealSearchProvider()) return [];
   try {
+    // Bumped from 5 → 10 so we have enough publisher diversity to assign one
+    // distinct article per angle (5 angles per cluster).
     const results = await search(story.headline.slice(0, 100), {
-      numResults:   5,
+      numResults:   10,
       text:         { maxCharacters: 600 },
       withContents: true,
       category:     'news',
@@ -117,6 +126,55 @@ async function _gatherWebContext(story, useInternet) {
     console.warn(`[angles] web search failed for "${story.headline.slice(0, 50)}":`, e.message);
     return [];
   }
+}
+
+/**
+ * Per-angle web search: for one LLM-generated angle headline, find an article
+ * whose title best matches it. Used when the cluster's primary search didn't
+ * surface enough distinct publishers, or to disambiguate which web result
+ * supports each angle.
+ *
+ * Returns { url, source, image, snippet } | null.
+ */
+async function _findArticleForAngle(angleHeadline, useInternet) {
+  if (!useInternet || !hasRealSearchProvider()) return null;
+  if (!angleHeadline) return null;
+  try {
+    const results = await search(angleHeadline.slice(0, 110), {
+      numResults:   3,
+      text:         { maxCharacters: 400 },
+      withContents: true,
+      category:     'news',
+    });
+    const arr = Array.isArray(results) ? results : [];
+    const r = arr.find(x => x.url && !BAD_DOMAIN.test(x.url));
+    if (!r) return null;
+    return {
+      url:     r.url,
+      source:  sourceName(r.url),
+      image:   r.image && isGoodImage(r.image, r.url) ? r.image : null,
+      snippet: cleanText(r.text || r.snippet).slice(0, 240),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Token-overlap similarity between two headlines. Used to match LLM-generated
+ * angle headlines to web search results when we already have webResults from
+ * the cluster-level search and want to avoid additional per-angle searches.
+ */
+function _headlineSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const tokenize = s => new Set(
+    String(s).toLowerCase().match(/[a-z0-9]+/g)?.filter(t => t.length > 3) || []
+  );
+  const ta = tokenize(a), tb = tokenize(b);
+  if (!ta.size || !tb.size) return 0;
+  let common = 0;
+  for (const t of ta) if (tb.has(t)) common++;
+  return common / Math.min(ta.size, tb.size);
 }
 
 function _buildBatchPrompt(stories, contextByIndex) {
@@ -190,24 +248,80 @@ function _fallbackAngles(story, ctx) {
   return out;
 }
 
-function _attachSourcesAndImages(story, angles, ctx) {
+/**
+ * Attach per-angle source attribution + image. Each angle gets matched to a
+ * distinct web result by headline similarity (preferred) or filled in by
+ * per-angle web search (fallback). Each angle gets a unique sourceUrl/source
+ * label/image, so deep-dive cards no longer all share the seed publisher.
+ */
+async function _attachSourcesAndImages(story, angles, ctx, useInternet) {
   const parentSrc = (story.source || '').split(',')[0].trim();
   const parentUrl = story.sourceUrl || story.url || '';
-  const imagePool = (ctx.webResults || [])
-    .filter(r => isGoodImage(r.image, r.url))
-    .map(r => ({ image: r.image, source: sourceName(r.url), sourceUrl: r.url }));
-  const usedImages = new Set();
-  return angles.map(a => {
-    const img = imagePool.find(p => !usedImages.has(p.image));
-    if (img) usedImages.add(img.image);
+
+  // Build pool of available web results, deduped by host (one publisher slot per host).
+  const pool = [];
+  const seenHosts = new Set();
+  for (const r of (ctx.webResults || [])) {
+    if (!r.url || BAD_DOMAIN.test(r.url)) continue;
+    let host = '';
+    try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch { continue; }
+    if (seenHosts.has(host)) continue;
+    seenHosts.add(host);
+    pool.push({
+      url:     r.url,
+      title:   r.title || '',
+      image:   isGoodImage(r.image, r.url) ? r.image : null,
+      source:  sourceName(r.url),
+      snippet: cleanText(r.text || r.snippet).slice(0, 240),
+    });
+  }
+
+  // Pass 1: match each angle to its best webResult by headline similarity.
+  // We greedily assign — each web result can only be used by one angle.
+  const assignments = new Array(angles.length).fill(null);
+  const usedPoolIdx = new Set();
+  for (let i = 0; i < angles.length; i++) {
+    let bestIdx = -1, bestScore = 0;
+    for (let j = 0; j < pool.length; j++) {
+      if (usedPoolIdx.has(j)) continue;
+      const sim = _headlineSimilarity(angles[i].headline, pool[j].title);
+      if (sim > bestScore) { bestScore = sim; bestIdx = j; }
+    }
+    // Require at least minimal token overlap (>=0.15) to consider it a real match.
+    if (bestIdx >= 0 && bestScore >= 0.15) {
+      assignments[i] = pool[bestIdx];
+      usedPoolIdx.add(bestIdx);
+    }
+  }
+
+  // Pass 2: for any unassigned angle, try a per-angle web search.
+  await Promise.all(assignments.map(async (assigned, i) => {
+    if (assigned) return;
+    const found = await _findArticleForAngle(angles[i].headline, useInternet);
+    if (found) assignments[i] = found;
+  }));
+
+  // Pass 3: any still-unassigned angles fall back to UNUSED pool entries (any host),
+  // so we don't end up assigning the parent's url/source to multiple angles.
+  const unusedPool = pool.filter((_, idx) => !usedPoolIdx.has(idx));
+  let unusedCursor = 0;
+  for (let i = 0; i < assignments.length; i++) {
+    if (assignments[i]) continue;
+    if (unusedCursor < unusedPool.length) {
+      assignments[i] = unusedPool[unusedCursor++];
+    }
+  }
+
+  return angles.map((a, i) => {
+    const r = assignments[i];
     return {
       headline:       a.headline,
       description:    a.description,
       dimension:      a.dimension,
-      source:         img?.source    || parentSrc || '',
-      sourceUrl:      img?.sourceUrl || parentUrl || '',
-      image:          img?.image     || require('./undraw').pick(a.headline || story.headline || ''),
-      internetSource: !!img,
+      source:         r?.source    || parentSrc || '',
+      sourceUrl:      r?.url       || parentUrl || '',
+      image:          r?.image     || require('./undraw').pick(a.headline || story.headline || ''),
+      internetSource: !!r,
     };
   });
 }
@@ -245,13 +359,15 @@ async function buildAnglesForTopStories(stories, useInternet, model) {
     console.warn('[angles] batched LLM call failed:', e.message);
   }
 
-  // 3) For any story with no LLM angles, fall back to deterministic synthesis
-  const finalAngles = top.map((s, i) => {
+  // 3) For any story with no LLM angles, fall back to deterministic synthesis.
+  //    _attachSourcesAndImages is now async (does per-angle web search) so
+  //    fan out across stories in parallel.
+  const finalAngles = await Promise.all(top.map(async (s, i) => {
     const ctx = contextByIndex[i];
     const llmAngles = parsed?.[i] || [];
     const angles = llmAngles.length ? llmAngles : _fallbackAngles(s, ctx);
-    return _attachSourcesAndImages(s, angles, ctx);
-  });
+    return _attachSourcesAndImages(s, angles, ctx, useInternet);
+  }));
 
   // 4) Mutate each top story in place + build topic_clusters[] for UI
   const topic_clusters = top.map((s, i) => {

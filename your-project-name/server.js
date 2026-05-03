@@ -302,7 +302,10 @@ app.get('/api/img-proxy', async (req, res) => {
   const url = req.query.url;
   if (!url || !/^https?:\/\//i.test(url)) return res.status(400).send('bad url');
   // Whitelist: only allow chart sources we've explicitly opted in to.
-  const ALLOW = /(bilello|charlie\.bilello|apolloacademy|nytimes\.com|nyt\.com|seekingalpha\.com|bloomberg|ft\.com|economist|substackcdn|wsj\.com|reuters\.com|cnbc\.com|wbn\.cdn)/i;
+  // Includes hosts of every active chart source AND their CDNs (Substack S3,
+  // Wordpress wp-content, etc.). Update this list when adding new sources to
+  // chart-of-day's DEFAULT_SOURCES.
+  const ALLOW = /(bilello|charlie\.bilello|apolloacademy|nytimes\.com|nyt\.com|seekingalpha\.com|bloomberg|ft\.com|economist|substackcdn|substack-post-media|substack\.com|amazonaws\.com|klementoninvesting|apricitas|wsj\.com|reuters\.com|cnbc\.com|wbn\.cdn|wp\.com|wp-content|cloudfront\.net)/i;
   if (!ALLOW.test(url)) return res.status(403).send('host not allowed');
   const now = Date.now();
   const cached = _imgProxyCache.get(url);
@@ -819,13 +822,26 @@ async function runDigestSSE(req, res) {
   try {
     const settings     = await storage.getSettings();
     const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+    // forceModel=sonnet is sent by the front-end on a user's first browser
+    // visit (no localStorage marker). It overrides every model role with the
+    // best Anthropic Sonnet so the very first impression of the product is
+    // generated with the strongest model regardless of saved settings.
+    const _force = String(req.query.forceModel || '').toLowerCase();
+    const SONNET = 'claude-sonnet-4-5-20250929';
+    const isFirstVisitForceSonnet = _force === 'sonnet' && process.env.ANTHROPIC_API_KEY;
     const _dm = settings.digestModel  || DEFAULT_MODEL;
     const _cm = settings.clusterModel || DEFAULT_MODEL;
     const _em = settings.editorModel  || _dm;
     // claude-cli is not available on Vercel — fall back to Llama
-    const digestModel  = _dm  === 'claude-cli' ? DEFAULT_MODEL : _dm;
-    const clusterModel = _cm  === 'claude-cli' ? DEFAULT_MODEL : _cm;
-    const editorModel  = _em  === 'claude-cli' ? DEFAULT_MODEL : _em;
+    let digestModel  = _dm  === 'claude-cli' ? DEFAULT_MODEL : _dm;
+    let clusterModel = _cm  === 'claude-cli' ? DEFAULT_MODEL : _cm;
+    let editorModel  = _em  === 'claude-cli' ? DEFAULT_MODEL : _em;
+    if (isFirstVisitForceSonnet) {
+      digestModel  = SONNET;
+      clusterModel = SONNET;
+      editorModel  = SONNET;
+      console.log('[cron/digest] FIRST-VISIT FORCE: all models set to Sonnet');
+    }
     // Extract enabled custom sections from settings
     const customSections = (settings.sections || []).filter(s => s.custom && s.enabled !== false);
     console.log(`[cron/digest] cluster: ${clusterModel}, digest: ${digestModel}, editor: ${editorModel}, custom: ${customSections.map(s=>s.label).join(',') || 'none'}`);

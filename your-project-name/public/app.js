@@ -2157,7 +2157,72 @@ function renderChartOfDay(el, data) {
   await loadNotebook();
   await loadDateRolodex();
   // loadChartsOfDay is called lazily by renderCategory when top_today is active
+
+  // First-visit auto-refresh: if this browser has never seen the digest,
+  // fire a fresh run with forceModel=sonnet so the very first impression
+  // uses the strongest model regardless of saved settings. Runs in the
+  // background while the tutorial / cached digest are visible.
+  try { maybeFirstVisitForceSonnetRefresh(); } catch (e) { console.warn('[first-visit]', e); }
 })();
+
+/* ── First-visit force-Sonnet auto-refresh ─────────────────────────────────
+   Triggers once per browser (no localStorage marker present) and runs the
+   full digest with all model roles set to Claude Sonnet on the server side.
+   Loading copy is intentionally honest: this only takes this long once. */
+function maybeFirstVisitForceSonnetRefresh() {
+  const KEY = 'manus_first_visited_v1';
+  if (localStorage.getItem(KEY)) return;
+  // Mark immediately so we don't double-fire on a quick reload while the
+  // request is still in flight.
+  localStorage.setItem(KEY, new Date().toISOString());
+
+  const digestArea = document.getElementById('digestArea');
+  if (!digestArea) return;
+
+  // Show a soft, non-blocking banner above the (already-rendered) cached
+  // digest so the user has something to look at while the Sonnet refresh runs.
+  let banner = document.getElementById('firstVisitBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'firstVisitBanner';
+    banner.style.cssText =
+      'margin:12px 0;padding:14px 18px;border-radius:12px;background:#1d2638;' +
+      'color:#e7eaf3;font-size:14px;line-height:1.5;display:flex;align-items:center;gap:12px;';
+    banner.innerHTML =
+      '<span class="spinner" style="width:14px;height:14px;border:2px solid #4f6079;border-top-color:#9bb4ff;border-radius:50%;display:inline-block;animation:spin 0.9s linear infinite;"></span>' +
+      '<span><strong>Brewing your personalised digest with Sonnet —</strong> ' +
+      'this only takes this long when it loads for the first time. ' +
+      'Carry on; we’ll swap in the upgraded version when it’s ready.</span>';
+    digestArea.parentNode.insertBefore(banner, digestArea);
+  }
+
+  const es = new EventSource('/api/run-digest?force=true&forceModel=sonnet&firstVisit=1');
+  es.addEventListener('status', e => {
+    try { console.log('[first-visit]', JSON.parse(e.data).message); } catch {}
+  });
+  const finishBanner = () => { try { banner.remove(); } catch {} };
+  es.addEventListener('done', e => {
+    try {
+      const digest = JSON.parse(e.data);
+      enrichDigestWithClusters(digest);
+      renderDigest(digest);
+      try { loadChartsOfDay(); } catch {}
+      try { loadDateRolodex(); } catch {}
+    } catch (err) { console.warn('[first-visit] done parse failed', err); }
+  });
+  es.addEventListener('enriched', e => {
+    try {
+      const digest = JSON.parse(e.data);
+      enrichDigestWithClusters(digest);
+      renderDigest(digest);
+      try { loadChartsOfDay(); } catch {}
+    } catch (err) { console.warn('[first-visit] enriched parse failed', err); }
+    finishBanner();
+    es.close();
+  });
+  es.addEventListener('error', () => { finishBanner(); es.close(); });
+  es.onerror = () => { finishBanner(); try { es.close(); } catch {} };
+}
 
 /* ── Persona Trainer ── */
 
