@@ -216,15 +216,17 @@ async function buildCorpus(story, entries, useInternet) {
     }
   }
 
-  // ── Pass 4: web-article content. Always run for top stories — adds breadth
-  //    even when newsletters covered the story, and is the SOLE source for
-  //    web-only stories (no matching newsletter entry).
+  // ── Pass 4: web-article content. Skip when newsletter corpus is already
+  //    strong (>5000 chars total) — saves ~5s per story. The newsletter
+  //    material alone gives Sonnet plenty to extract angles from.
   //
   //    Provider notes: Exa supports withContents (full article text). When the
   //    user has Exa disabled (useExa=false), the chain falls through to GDELT
   //    which returns short snippets (<200 chars). For those we follow up with
   //    a direct HTTP fetch to the article URL to get a real corpus.
-  if (useInternet && hasRealSearchProvider()) {
+  const newsletterChars = contributors.reduce((sum, c) => sum + (c.kind === 'newsletter' ? c.excerpt.length : 0), 0);
+  const skipWebSearch = newsletterChars > 5000;
+  if (!skipWebSearch && useInternet && hasRealSearchProvider()) {
     try {
       const query = `${story.headline}`.slice(0, 130);
       const results = await search(query, {
@@ -366,78 +368,64 @@ function _parseBatchResponse(raw, storiesLen) {
 // ── Per-angle URL + image attachment ────────────────────────────────────────
 
 /**
- * Find a clickable URL + image for an angle.
- *   1. If the angle's source_badge matches a contributor we already fetched
- *      (e.g. via Pass 4 web search), reuse that contributor's url + image.
- *   2. Otherwise fire a small web search for the badge + headline.
- *   3. Fall back to parent URL or undraw illustration.
+ * Find a clickable URL + image for an angle. Synchronous — no new HTTP calls.
+ *
+ * Strategy (no per-angle web search; that adds 20+ search calls and was the
+ * dominant slowdown):
+ *   1. If the angle's source_badge matches a Pass-4 contributor, reuse that
+ *      contributor's url + image.
+ *   2. If the badge matches the parent story's source, use parentUrl.
+ *   3. Otherwise pick the FIRST web contributor as a generic article link.
+ *   4. Last resort: parentUrl, or null (undraw illustration takes over).
  */
-async function _findArticleForAngle(angleHeadline, badge, parentSrc, parentUrl, useInternet, contributors = []) {
+function _findArticleForAngle(angleHeadline, badge, parentSrc, parentUrl, contributors = []) {
+  const badgeLower = (badge || '').toLowerCase();
+  const badgeFirst = badgeLower.split(/\s+/)[0];
+
   // 1) reuse contributor URL when badge matches
-  if (badge && contributors.length) {
-    const lc = badge.toLowerCase();
-    const match = contributors.find(c => c.url && String(c.source).toLowerCase().includes(lc.split(/\s+/)[0]));
+  if (badgeFirst && contributors.length) {
+    const match = contributors.find(c => c.url && String(c.source).toLowerCase().includes(badgeFirst));
     if (match) {
-      return { url: match.url, source: match.source, image: match.image || null, snippet: '' };
+      return { url: match.url, source: match.source, image: match.image || null };
     }
   }
 
   // 2) parent URL when badge matches parent source
-  if (parentUrl && badge && parentSrc &&
-      parentSrc.toLowerCase().includes(badge.toLowerCase().split(/\s+/)[0])) {
-    return { url: parentUrl, source: parentSrc, image: null, snippet: '' };
+  if (parentUrl && badgeFirst && parentSrc &&
+      parentSrc.toLowerCase().includes(badgeFirst)) {
+    return { url: parentUrl, source: parentSrc, image: null };
   }
 
-  if (!useInternet || !hasRealSearchProvider()) {
-    if (parentUrl) return { url: parentUrl, source: parentSrc || badge, image: null, snippet: '' };
-    return null;
+  // 3) any web contributor as a generic source link (better than nothing)
+  const firstWeb = contributors.find(c => c.url && c.kind === 'web');
+  if (firstWeb) {
+    return { url: firstWeb.url, source: firstWeb.source, image: firstWeb.image || null };
   }
 
-  try {
-    const query = badge ? `${badge} ${angleHeadline}` : angleHeadline;
-    const results = await search(query.slice(0, 130), {
-      numResults:   3,
-      text:         { maxCharacters: 300 },
-      withContents: true,
-      category:     'news',
-    });
-    const arr = Array.isArray(results) ? results : [];
-    const r = arr.find(x => x.url && !BAD_DOMAIN.test(x.url));
-    if (!r) {
-      if (parentUrl) return { url: parentUrl, source: parentSrc || badge, image: null, snippet: '' };
-      return null;
-    }
-    return {
-      url:     r.url,
-      source:  badge || sourceName(r.url),
-      image:   r.image && isGoodImage(r.image, r.url) ? r.image : null,
-      snippet: cleanText(r.text || r.snippet).slice(0, 240),
-    };
-  } catch {
-    if (parentUrl) return { url: parentUrl, source: parentSrc || badge, image: null, snippet: '' };
-    return null;
-  }
+  // 4) parent URL as last resort
+  if (parentUrl) return { url: parentUrl, source: parentSrc || badge || '', image: null };
+  return null;
 }
 
-async function _attachSourcesAndImages(story, angles, useInternet, contributors) {
+function _attachSourcesAndImages(story, angles, contributors) {
   const parentSrc = (story.source || '').split(',')[0].trim();
   const parentUrl = story.sourceUrl || story.url || '';
+  const undraw = require('./undraw');
 
-  const enriched = await Promise.all(angles.map(async a => {
+  // No async work — all URL/image data is reused from corpus contributors.
+  return angles.map(a => {
     const badge = a.source_badge || parentSrc;
-    const found = await _findArticleForAngle(a.headline, badge, parentSrc, parentUrl, useInternet, contributors);
+    const found = _findArticleForAngle(a.headline, badge, parentSrc, parentUrl, contributors);
     return {
       headline:       a.headline,
       description:    a.description,
       source_badge:   badge,
       source:         badge || (found?.source || parentSrc || ''),
       sourceUrl:      found?.url || parentUrl || '',
-      image:          found?.image || require('./undraw').pick(a.headline || story.headline || ''),
+      image:          found?.image || undraw.pick(a.headline || story.headline || ''),
       internetSource: !!found?.url && found.url !== parentUrl,
     };
-  }));
-
-  return enriched;
+  });
 }
 
 // ── Fallback synthesis when LLM returns empty ───────────────────────────────
@@ -488,17 +476,18 @@ async function buildAnglesForTopStories(stories, useInternet, model, entries = [
     console.warn('[angles] batched LLM call failed:', e.message);
   }
 
-  // 3) For each story, attach URLs/images. Use _fallbackAngles only if LLM
-  //    returned nothing AND we have at least one contributor.
-  const finalAngles = await Promise.all(top.map(async (s, i) => {
+  // 3) For each story, attach URLs/images synchronously — no new HTTP calls.
+  //    Use _fallbackAngles only if LLM returned nothing AND we have at least
+  //    one contributor.
+  const finalAngles = top.map((s, i) => {
     const llmAngles = parsed?.[i] || [];
     const contributors = corpusByIndex[i].contributors;
     const angles = llmAngles.length
       ? llmAngles
       : (contributors.length ? _fallbackAngles(s, contributors) : []);
     if (!angles.length) return [];
-    return _attachSourcesAndImages(s, angles, useInternet, contributors);
-  }));
+    return _attachSourcesAndImages(s, angles, contributors);
+  });
 
   // 4) Mutate each top story + build topic_clusters[] for UI.
   const topic_clusters = top.map((s, i) => {
