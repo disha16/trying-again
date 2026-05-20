@@ -346,7 +346,7 @@ function buildFallbackChain(primary) {
 function isProviderFailure(err) {
   if (!err) return false;
   const status = err.status || err.statusCode;
-  if (status === 401 || status === 402 || status === 403 || status === 429) return true;
+  if (status === 400 || status === 401 || status === 402 || status === 403 || status === 429) return true;
   if (status && status >= 500 && status < 600) return true;
   const msg = String(err.message || err).toLowerCase();
   return /api.?key|unauthori|forbidden|credits?|quota|insufficient|balance|rate.?limit|overload|internal server|service unavailable|unavailable|billing|payment|no.?api.?key|not.?set/.test(msg);

@@ -26,8 +26,9 @@ const { search, hasRealSearchProvider } = require('./web-search');
 const BAD_DOMAIN = /globenewswire|prnewswire|businesswire|accesswire|notified\.com|einpresswire|prlog/i;
 const BAD_IMAGE  = /sponsor|supported[_-]by|partner|adverti|banner|logo[_-]|brand|promo|newsletter|header|footer|icon|avatar|profile|placeholder|pixel|tracking|beacon|favicon|sprite|encrypted-tbn|gstatic\.com/i;
 
-// Sonnet model id used for deep-dive angle extraction. Override with
-// ANGLES_MODEL env var if a newer Sonnet alias becomes available.
+// Model for deep-dive angle extraction. Prefers Sonnet when available, but
+// falls back to the digest model (qwen-plus etc.) via the standard fallback
+// chain so deep dives still generate when Anthropic credits are exhausted.
 const SONNET_MODEL = process.env.ANGLES_MODEL || 'claude-sonnet-4-5-20250929';
 
 function isGoodImage(imageUrl, sourceUrl) {
@@ -448,12 +449,15 @@ function _fallbackAngles(story, contributors) {
 /**
  * @param {Array}   stories      digest.top_today
  * @param {boolean} useInternet  settings.internetFallback
- * @param {string}  model        digestModel (IGNORED — angles always uses Sonnet)
+ * @param {string}  model        digestModel — used as fallback when Sonnet is unavailable
  * @param {Array}   entries      raw newsletter entries (each: { source, bodyText, ... })
  */
 async function buildAnglesForTopStories(stories, useInternet, model, entries = []) {
   if (!Array.isArray(stories) || !stories.length) return { topic_clusters: [] };
   const top = stories.slice(0, 5);
+  // Determine the model to use: prefer Sonnet, but if Anthropic key is missing
+  // or known-exhausted, skip straight to the digest model to avoid timeout waste.
+  const anglesModel = process.env.ANTHROPIC_API_KEY ? SONNET_MODEL : (model || 'qwen-plus');
 
   // 1) Build per-story corpus (newsletter + web). Run in parallel.
   const corpusByIndex = await Promise.all(top.map(async (s, i) => {
@@ -464,16 +468,16 @@ async function buildAnglesForTopStories(stories, useInternet, model, entries = [
     return result;
   }));
 
-  // 2) ONE batched Sonnet call for all 5 stories.
+  // 2) ONE batched LLM call for all 5 stories (prefers Sonnet, falls back via chain).
   let parsed = null;
   try {
     const prompt = _buildBatchPrompt(top, corpusByIndex);
-    console.log(`[angles] calling ${SONNET_MODEL} with batched prompt (${prompt.length}c across ${top.length} stories)`);
-    const raw    = await _callModel(SONNET_MODEL, prompt, ANGLES_BATCH_SYSTEM);
+    console.log(`[angles] calling ${anglesModel} with batched prompt (${prompt.length}c across ${top.length} stories)`);
+    const raw    = await _callModel(anglesModel, prompt, ANGLES_BATCH_SYSTEM);
     parsed = _parseBatchResponse(raw, top.length);
     if (!parsed) console.warn('[angles] batched LLM call returned no parseable JSON. Raw head:', (raw || '').slice(0, 300));
   } catch (e) {
-    console.warn('[angles] batched LLM call failed:', e.message);
+    console.error('[angles] batched LLM call failed (all providers exhausted):', e.message);
   }
 
   // 3) For each story, attach URLs/images synchronously — no new HTTP calls.

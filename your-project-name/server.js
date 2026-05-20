@@ -1078,7 +1078,7 @@ async function runDigestSSE(req, res) {
               try { send('section', { section: 'topic_clusters', payload: topic_clusters, top_today: digest.top_today }); } catch {}
               return storage.setLastRun(digest); // save as soon as deep dives are ready
             })
-            .catch(e => console.error('[cron/digest] angles error:', e.message)),
+            .catch(e => console.error('[cron/digest] angles error (deep dives will be empty):', e.message, e.stack?.split('\n')[1] || '')),
 
           storyEnricher.enrichTopStories(digest.top_today, digestModel)
             .catch(e => console.error('[cron/digest] story enricher error:', e.message)),
