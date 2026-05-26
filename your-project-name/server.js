@@ -211,7 +211,10 @@ app.post('/api/settings', async (req, res) => {
   const update = {};
   for (const key of modelKeys) {
     if (req.body[key] === undefined) continue;
-    if (!validModels.includes(req.body[key])) return res.status(400).json({ error: `Invalid model for ${key}` });
+    // Accept any model in the known list OR any "ollama:<name>" for custom local models.
+    if (!validModels.includes(req.body[key]) && !digestGen.isOllamaModel(req.body[key])) {
+      return res.status(400).json({ error: `Invalid model for ${key}` });
+    }
     update[key] = req.body[key];
   }
   if (req.body.internetFallback !== undefined) update.internetFallback = !!req.body.internetFallback;

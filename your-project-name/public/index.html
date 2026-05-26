@@ -317,24 +317,42 @@
         </div>
         <select id="clusterModelPicker" class="model-picker" data-key="clusterModel">
           <optgroup label="Anthropic (requires API key)">
-              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
-              <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (balanced)</option>
-              <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (powerful)</option>
-            </optgroup>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
+            <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (balanced)</option>
+            <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (powerful)</option>
+            <option value="claude-opus-4-20250514">Claude Opus 4 (best)</option>
+            <option value="claude-opus-4-5-20251101">Claude Opus 4.5 (best+)</option>
+          </optgroup>
           <optgroup label="Groq — Llama (free)">
             <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
             <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
             <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+          </optgroup>
+          <optgroup label="DeepSeek (requires API key)">
+            <option value="deepseek-chat">DeepSeek Chat</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
           </optgroup>
           <optgroup label="Qwen (requires API key)">
             <option value="qwen-max">Qwen Max</option>
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
           </optgroup>
+          <optgroup label="Ollama — Local (requires Ollama running at localhost:11434)">
+            <option value="ollama:llama3.3">Llama 3.3 (local)</option>
+            <option value="ollama:llama3.2">Llama 3.2 (local)</option>
+            <option value="ollama:mistral">Mistral (local)</option>
+            <option value="ollama:mixtral">Mixtral (local)</option>
+            <option value="ollama:phi4">Phi 4 (local)</option>
+            <option value="ollama:gemma3">Gemma 3 (local)</option>
+            <option value="ollama:qwen2.5">Qwen 2.5 (local)</option>
+            <option value="ollama:deepseek-r1">DeepSeek R1 (local)</option>
+          </optgroup>
+          <optgroup label="Claude CLI (local, no API key needed)">
+            <option value="claude-cli">Claude CLI</option>
+          </optgroup>
           <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
             <option value="manus">Manus</option>
           </optgroup>
-
         </select>
       </div>
 
@@ -348,21 +366,39 @@
             <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
             <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (balanced)</option>
             <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (powerful)</option>
+            <option value="claude-opus-4-20250514">Claude Opus 4 (best)</option>
+            <option value="claude-opus-4-5-20251101">Claude Opus 4.5 (best+)</option>
           </optgroup>
           <optgroup label="Groq — Llama (free)">
             <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
             <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
             <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
           </optgroup>
+          <optgroup label="DeepSeek (requires API key)">
+            <option value="deepseek-chat">DeepSeek Chat</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+          </optgroup>
           <optgroup label="Qwen (requires API key)">
             <option value="qwen-max">Qwen Max</option>
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
           </optgroup>
+          <optgroup label="Ollama — Local (requires Ollama running at localhost:11434)">
+            <option value="ollama:llama3.3">Llama 3.3 (local)</option>
+            <option value="ollama:llama3.2">Llama 3.2 (local)</option>
+            <option value="ollama:mistral">Mistral (local)</option>
+            <option value="ollama:mixtral">Mixtral (local)</option>
+            <option value="ollama:phi4">Phi 4 (local)</option>
+            <option value="ollama:gemma3">Gemma 3 (local)</option>
+            <option value="ollama:qwen2.5">Qwen 2.5 (local)</option>
+            <option value="ollama:deepseek-r1">DeepSeek R1 (local)</option>
+          </optgroup>
+          <optgroup label="Claude CLI (local, no API key needed)">
+            <option value="claude-cli">Claude CLI</option>
+          </optgroup>
           <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
             <option value="manus">Manus</option>
           </optgroup>
-
         </select>
       </div>
 
@@ -376,21 +412,39 @@
             <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
             <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (balanced)</option>
             <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (powerful)</option>
+            <option value="claude-opus-4-20250514">Claude Opus 4 (best)</option>
+            <option value="claude-opus-4-5-20251101">Claude Opus 4.5 (best+)</option>
           </optgroup>
           <optgroup label="Groq — Llama (free)">
             <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
             <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
             <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
           </optgroup>
+          <optgroup label="DeepSeek (requires API key)">
+            <option value="deepseek-chat">DeepSeek Chat</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+          </optgroup>
           <optgroup label="Qwen (requires API key)">
             <option value="qwen-max">Qwen Max</option>
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
           </optgroup>
+          <optgroup label="Ollama — Local (requires Ollama running at localhost:11434)">
+            <option value="ollama:llama3.3">Llama 3.3 (local)</option>
+            <option value="ollama:llama3.2">Llama 3.2 (local)</option>
+            <option value="ollama:mistral">Mistral (local)</option>
+            <option value="ollama:mixtral">Mixtral (local)</option>
+            <option value="ollama:phi4">Phi 4 (local)</option>
+            <option value="ollama:gemma3">Gemma 3 (local)</option>
+            <option value="ollama:qwen2.5">Qwen 2.5 (local)</option>
+            <option value="ollama:deepseek-r1">DeepSeek R1 (local)</option>
+          </optgroup>
+          <optgroup label="Claude CLI (local, no API key needed)">
+            <option value="claude-cli">Claude CLI</option>
+          </optgroup>
           <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
             <option value="manus">Manus</option>
           </optgroup>
-
         </select>
       </div>
     </div>
@@ -408,24 +462,53 @@
             <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
             <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (balanced)</option>
             <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (powerful)</option>
+            <option value="claude-opus-4-20250514">Claude Opus 4 (best)</option>
+            <option value="claude-opus-4-5-20251101">Claude Opus 4.5 (best+)</option>
           </optgroup>
           <optgroup label="Groq — Llama (free)">
             <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
             <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
             <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
           </optgroup>
+          <optgroup label="DeepSeek (requires API key)">
+            <option value="deepseek-chat">DeepSeek Chat</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+          </optgroup>
           <optgroup label="Qwen (requires API key)">
             <option value="qwen-max">Qwen Max</option>
             <option value="qwen-plus">Qwen Plus</option>
             <option value="qwen-turbo">Qwen Turbo</option>
           </optgroup>
+          <optgroup label="Ollama — Local (requires Ollama running at localhost:11434)">
+            <option value="ollama:llama3.3">Llama 3.3 (local)</option>
+            <option value="ollama:llama3.2">Llama 3.2 (local)</option>
+            <option value="ollama:mistral">Mistral (local)</option>
+            <option value="ollama:mixtral">Mixtral (local)</option>
+            <option value="ollama:phi4">Phi 4 (local)</option>
+            <option value="ollama:gemma3">Gemma 3 (local)</option>
+            <option value="ollama:qwen2.5">Qwen 2.5 (local)</option>
+            <option value="ollama:deepseek-r1">DeepSeek R1 (local)</option>
+          </optgroup>
+          <optgroup label="Claude CLI (local, no API key needed)">
+            <option value="claude-cli">Claude CLI</option>
+          </optgroup>
           <optgroup label="Manus (autonomous agent — slow, ~1-3 min)">
             <option value="manus">Manus</option>
           </optgroup>
-
         </select>
       </div>
 
+    </div>
+
+    <!-- ─── Anthropic API Key ──────────────────────────────────────────────────── -->
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+      <div class="model-group-label" style="margin-bottom:8px">Anthropic API Key</div>
+      <p class="meta" style="margin:0 0 10px">Required to use Claude models. Get a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>. Stored server-side, never sent to the browser.</p>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="password" id="anthropicKeyInput" class="nb-new-input" placeholder="sk-ant-…" style="flex:1;font-family:monospace;font-size:.85rem" autocomplete="off" />
+        <button id="anthropicKeySaveBtn" class="btn-primary" style="white-space:nowrap">Save key</button>
+      </div>
+      <p id="anthropicKeyStatus" class="meta" style="margin-top:6px;color:var(--gold)"></p>
     </div>
 
     <p id="modelSaveStatus" class="meta" style="margin-top:12px;color:var(--gold)"></p>

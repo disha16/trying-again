@@ -993,6 +993,41 @@ $('#useExaToggle')?.addEventListener('change', async e => {
   showSaveStatus(on ? 'Exa on — next refresh will fetch images & richer web context' : 'Exa off — no card images, no Exa credits used');
 });
 
+// ── Anthropic API Key (Settings tab) ─────────────────────────────────────
+(async () => {
+  const input  = $('#anthropicKeyInput');
+  const btn    = $('#anthropicKeySaveBtn');
+  const status = $('#anthropicKeyStatus');
+  if (!input || !btn) return;
+
+  // Show whether a key is already stored (the value itself is masked server-side)
+  const s = await fetch('/api/settings').then(r => r.json()).catch(() => ({}));
+  if (s.anthropicApiKeyConfigured) {
+    input.placeholder = '••••••••••••••••••••••••• (key stored — paste to replace)';
+    status.textContent = '✓ Anthropic API key is configured';
+  }
+
+  btn.addEventListener('click', async () => {
+    const key = input.value.trim();
+    if (!key) { status.textContent = 'Paste your API key first.'; return; }
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      await fetch('/api/settings', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ anthropicApiKey: key }),
+      });
+      input.value = '';
+      input.placeholder = '••••••••••••••••••••••••• (key stored — paste to replace)';
+      status.textContent = '✓ Key saved — Claude models are now available';
+    } catch {
+      status.textContent = 'Save failed — check the server is running';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save key';
+    }
+  });
+})();
+
 // ── Suggested Thought Leaders (admin-only accordion) ─────────────────────
 async function loadSuggestedTL() {
   const wrap = $('#suggTlList');

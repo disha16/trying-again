@@ -20,7 +20,30 @@ const ANTHROPIC_MODELS = [
 ];
 const CLI_MODELS       = ['claude-cli'];
 const MANUS_MODELS     = ['manus'];
-const ALL_MODELS       = [...CLI_MODELS, ...MANUS_MODELS, ...ANTHROPIC_MODELS, ...GROQ_MODELS, ...DEEPSEEK_MODELS, ...QWEN_MODELS];
+
+// Ollama: local models via OpenAI-compatible API at http://localhost:11434/v1
+// Prefix all Ollama model IDs with "ollama:" to distinguish them from cloud models.
+// Users can also type any "ollama:<model>" name — the prefix is what triggers local routing.
+const OLLAMA_BASE_URL  = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1';
+const OLLAMA_MODELS    = [
+  'ollama:llama3.3',
+  'ollama:llama3.2',
+  'ollama:llama3.1',
+  'ollama:mistral',
+  'ollama:mixtral',
+  'ollama:phi4',
+  'ollama:gemma3',
+  'ollama:qwen2.5',
+  'ollama:deepseek-r1',
+  'ollama:codellama',
+];
+
+// Returns true for any model with the "ollama:" prefix (including custom ones not in OLLAMA_MODELS).
+function isOllamaModel(model) {
+  return typeof model === 'string' && model.startsWith('ollama:');
+}
+
+const ALL_MODELS       = [...CLI_MODELS, ...MANUS_MODELS, ...ANTHROPIC_MODELS, ...GROQ_MODELS, ...DEEPSEEK_MODELS, ...QWEN_MODELS, ...OLLAMA_MODELS];
 
 // Resolve Anthropic API key: prefer settings (UI input) over env var
 async function getAnthropicKey() {
@@ -38,6 +61,9 @@ function getClient(model) {
     return new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com' });
   if (QWEN_MODELS.includes(model))
     return new OpenAI({ apiKey: process.env.QWEN_API_KEY,     baseURL: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' });
+  if (isOllamaModel(model))
+    // Ollama doesn't require a real API key; the base URL is all that matters.
+    return new OpenAI({ apiKey: 'ollama', baseURL: OLLAMA_BASE_URL });
   throw new Error(`Unknown model: ${model}`);
 }
 
@@ -119,6 +145,7 @@ async function withRetry(fn, retries = 3) {
 }
 
 function _isClaude(model) {
+  if (isOllamaModel(model)) return false; // local models are never Claude
   const m = String(model || '').toLowerCase();
   return m.startsWith('claude') || m.startsWith('anthropic') || m.includes('sonnet') || m.includes('opus') || m.includes('haiku');
 }
@@ -294,9 +321,12 @@ async function _callModelDirect(model, prompt, systemOverride) {
   if (ANTHROPIC_MODELS.includes(model)) {
     return callAnthropic(model, sys, prompt);
   }
-  const client   = getClient(model);
+  const client = getClient(model);
+  // Ollama requires the model name without the "ollama:" prefix (e.g. "llama3.3" not "ollama:llama3.3").
+  const apiModelName = isOllamaModel(model) ? model.slice('ollama:'.length) : model;
+  if (isOllamaModel(model)) console.log(`[digest] model: ${model} (Ollama → ${apiModelName}) via ${OLLAMA_BASE_URL}`);
   const response = await client.chat.completions.create({
-    model,
+    model:      apiModelName,
     max_tokens: 6000,
     messages: [
       { role: 'system', content: sys },
@@ -338,6 +368,10 @@ function buildFallbackChain(primary) {
     if (process.env[envKey]) add(model);
   }
 
+  // 4. Ollama as final local fallback — always available when running locally.
+  //    Only added when OLLAMA_BASE_URL is explicitly set (or we're not in a cloud env).
+  if (process.env.OLLAMA_BASE_URL) add('ollama:llama3.3');
+
   return chain;
 }
 
@@ -349,7 +383,7 @@ function isProviderFailure(err) {
   if (status === 400 || status === 401 || status === 402 || status === 403 || status === 429) return true;
   if (status && status >= 500 && status < 600) return true;
   const msg = String(err.message || err).toLowerCase();
-  return /api.?key|unauthori|forbidden|credits?|quota|insufficient|balance|rate.?limit|overload|internal server|service unavailable|unavailable|billing|payment|no.?api.?key|not.?set/.test(msg);
+  return /api.?key|unauthori|forbidden|credits?|quota|insufficient|balance|rate.?limit|overload|internal server|service unavailable|unavailable|billing|payment|no.?api.?key|not.?set|econnrefused|connection refused|failed to fetch|network error/.test(msg);
 }
 
 // Safe LLM dispatch with cross-provider fallback chain.
@@ -483,4 +517,4 @@ async function generateDigest(clusters, model = 'llama-3.3-70b-versatile', readS
   return digest;
 }
 
-module.exports = { generateDigest, buildSystemPrompt, getClient, callClaudeCLI, callAnthropic, _callModel, ALL_MODELS, CLI_MODELS, MANUS_MODELS, ANTHROPIC_MODELS, GROQ_MODELS, DEEPSEEK_MODELS, QWEN_MODELS };
+module.exports = { generateDigest, buildSystemPrompt, getClient, callClaudeCLI, callAnthropic, _callModel, ALL_MODELS, CLI_MODELS, MANUS_MODELS, ANTHROPIC_MODELS, GROQ_MODELS, DEEPSEEK_MODELS, QWEN_MODELS, OLLAMA_MODELS, OLLAMA_BASE_URL, isOllamaModel };
